@@ -812,3 +812,29 @@ body.sc-dark-theme .visualSound__wrapper,
 body.sc-dark-theme img {
   filter: none !important;
 }
+
+/* Active states for Shuffle, Repeat and Like buttons in Deep Dark Theme */
+body.sc-dark-theme .playControls .shuffleControl.m-shuffling,
+body.sc-dark-theme .playControls .shuffleControl[aria-checked="true"],
+body.sc-dark-theme .playControls .repeatControl.m-one,
+body.sc-dark-theme .playControls .repeatControl.m-all,
+body.sc-dark-theme .playbackSoundBadge__like.sc-button-selected,
+body.sc-dark-theme .playbackSoundBadge__like[aria-pressed="true"],
+body.sc-dark-theme .sc-button-like.sc-button-selected,
+body.sc-dark-theme .sc-button-like[aria-pressed="true"] {
+  color: #ff5500 !important;
+  border-color: rgba(255, 85, 0, 0.45) !important;
+  background-color: rgba(255, 85, 0, 0.14) !important;
+}
+
+body.sc-dark-theme .playControls .shuffleControl.m-shuffling svg,
+body.sc-dark-theme .playControls .shuffleControl[aria-checked="true"] svg,
+body.sc-dark-theme .playControls .repeatControl.m-one svg,
+body.sc-dark-theme .playControls .repeatControl.m-all svg,
+body.sc-dark-theme .playbackSoundBadge__like.sc-button-selected svg,
+body.sc-dark-theme .playbackSoundBadge__like[aria-pressed="true"] svg,
+body.sc-dark-theme .sc-button-like.sc-button-selected svg,
+body.sc-dark-theme .sc-button-like[aria-pressed="true"] svg {
+  fill: #ff5500 !important;
+  color: #ff5500 !important;
+}

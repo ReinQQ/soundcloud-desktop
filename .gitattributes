@@ -1,3 +1,5 @@
-src-tauri/injected.js linguist-generated=true
-injected/** linguist-vendored=true
-scripts/** linguist-vendored=true
+*.js linguist-detectable=false
+*.ts linguist-detectable=false
+*.css linguist-detectable=false
+*.ps1 linguist-detectable=false
+*.sh linguist-detectable=false

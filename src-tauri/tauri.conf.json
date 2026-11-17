@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "soundcloud-desktop",
+  "version": "0.1.0",
+  "identifier": "io.github.reinqq.soundcloud",
+  "build": {
+    "frontendDist": "../dist",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "android": {
+      "debugApplicationIdSuffix": ".debug"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdDNzYxNERFNTkzMTk0NEMKUldSTWxERlozaFIyZkVGTGc2NEtuS2t1MG12T0FIS1AyYkE5b0pJUFpQa2JFbndpazgrTFA0RmoK",
+      "endpoints": [
+        "https://github.com/ReinQQ/soundcloud-desktop/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}

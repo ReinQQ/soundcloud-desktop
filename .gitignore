@@ -1,0 +1,17 @@
+# Secrets & Private Keys (MUST NEVER BE COMMITTED)
+.keys/
+*.key
+*.pub
+
+# Build artifacts
+node_modules/
+dist/
+release-dist/
+src-tauri/target/
+
+# OS and Editor files
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/

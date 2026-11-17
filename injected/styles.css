@@ -1,0 +1,814 @@
+/* ==========================================================================
+   SoundCloud Native Desktop Client - Stylesheet
+   Crafted following frontend-design guidelines: intentional typography,
+   tailored palette, restrained micro-interactions & deep dark theme.
+   ========================================================================== */
+
+:root {
+  --sc-brand-orange: #ff5500;
+  --sc-brand-orange-hover: #ff6d24;
+  --sc-brand-orange-active: #e64d00;
+  --sc-brand-orange-dim: rgba(255, 85, 0, 0.15);
+  --sc-brand-orange-border: rgba(255, 85, 0, 0.35);
+
+  --sc-bg-chrome: #0d0d10;
+  --sc-bg-surface: #141418;
+  --sc-bg-surface-elevated: #1a1a20;
+  --sc-bg-surface-hover: #22222a;
+  --sc-bg-input: #111114;
+
+  --sc-border-subtle: rgba(255, 255, 255, 0.07);
+  --sc-border-medium: rgba(255, 255, 255, 0.12);
+  --sc-border-focus: #ff5500;
+
+  --sc-text-primary: #f4f4f6;
+  --sc-text-secondary: #a0a0ab;
+  --sc-text-muted: #6b6b78;
+
+  --sc-titlebar-height: 36px;
+  --sc-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* ==========================================================================
+   Window & Header Layout Corrections
+   ========================================================================== */
+
+body.sc-desktop-active {
+  padding-top: var(--sc-titlebar-height) !important;
+}
+
+/* Push SoundCloud fixed top navigation header down so nothing clips */
+.header,
+#header,
+header.header,
+.sc-header {
+  top: var(--sc-titlebar-height) !important;
+  z-index: 1000 !important;
+}
+
+/* ==========================================================================
+   Custom Frameless Titlebar
+   ========================================================================== */
+
+#sc-desktop-titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: var(--sc-titlebar-height);
+  background: var(--sc-bg-chrome);
+  border-bottom: 1px solid var(--sc-border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0 0 12px;
+  z-index: 999999;
+  user-select: none;
+  font-family: var(--sc-font-sans);
+  font-size: 12px;
+  color: var(--sc-text-primary);
+  box-sizing: border-box;
+}
+
+/* Non-draggable interactive controls inside titlebar */
+.sc-no-drag {
+  -webkit-app-region: no-drag !important;
+  app-region: no-drag !important;
+  pointer-events: auto !important;
+}
+
+/* Left: Branding */
+.sc-titlebar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+}
+
+.sc-brand-icon {
+  width: 18px;
+  height: 18px;
+  fill: var(--sc-brand-orange);
+  display: block;
+}
+
+.sc-brand-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--sc-text-primary);
+}
+
+.sc-brand-sub {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--sc-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-left: 2px;
+}
+
+/* Center / Status Badges */
+.sc-titlebar-center {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+}
+
+.sc-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--sc-border-subtle);
+  color: var(--sc-text-muted);
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.sc-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sc-text-muted);
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+/* Proxy badge active */
+.sc-status-badge.proxy-active {
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.25);
+  color: #34d399;
+}
+.sc-status-badge.proxy-active .sc-status-dot {
+  background: #10b981;
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.5);
+}
+
+/* Discord badge active */
+.sc-status-badge.discord-active {
+  background: rgba(88, 101, 242, 0.1);
+  border-color: rgba(88, 101, 242, 0.25);
+  color: #818cf8;
+}
+.sc-status-badge.discord-active .sc-status-dot {
+  background: #5865f2;
+  box-shadow: 0 0 6px rgba(88, 101, 242, 0.5);
+}
+
+/* Audio ad muted badge */
+.sc-status-badge.ad-muted {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #f87171;
+}
+.sc-status-badge.ad-muted .sc-status-dot {
+  background: #ef4444;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.5);
+}
+
+/* Update Available badge */
+.sc-status-badge.update-available {
+  background: rgba(255, 85, 0, 0.15);
+  border-color: var(--sc-brand-orange-border);
+  color: #ff9d66;
+  cursor: pointer;
+}
+.sc-status-badge.update-available:hover {
+  background: rgba(255, 85, 0, 0.25);
+  color: #ffffff;
+}
+.sc-status-badge.update-available .sc-status-dot {
+  background: var(--sc-brand-orange);
+  box-shadow: 0 0 6px rgba(255, 85, 0, 0.6);
+}
+
+/* Right: Settings and Window Controls */
+.sc-titlebar-right {
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+.sc-titlebar-btn {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--sc-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+  height: 100%;
+  padding: 0 12px;
+  -webkit-app-region: no-drag !important;
+  app-region: no-drag !important;
+  pointer-events: auto !important;
+}
+
+.sc-titlebar-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--sc-text-primary);
+}
+
+.sc-titlebar-btn.active,
+.sc-titlebar-btn:focus-visible {
+  color: var(--sc-brand-orange);
+}
+
+.sc-titlebar-btn svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+  pointer-events: none;
+}
+
+/* Window Minimize, Maximize, Close */
+.sc-win-btn {
+  width: 44px;
+  height: 100%;
+  padding: 0;
+  -webkit-app-region: no-drag !important;
+  app-region: no-drag !important;
+  pointer-events: auto !important;
+}
+
+.sc-win-close:hover {
+  background: #e81123 !important;
+  color: #ffffff !important;
+}
+
+.sc-win-close:active {
+  background: #bf0f1d !important;
+}
+
+/* ==========================================================================
+   Settings Modal Overlay
+   ========================================================================== */
+
+#sc-settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 8, 10, 0.65);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  z-index: 1000000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  font-family: var(--sc-font-sans);
+}
+
+#sc-settings-overlay.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sc-settings-card {
+  width: 600px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  background: var(--sc-bg-surface);
+  border: 1px solid var(--sc-border-medium);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  transform: scale(0.97) translateY(4px);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: hidden;
+}
+
+#sc-settings-overlay.visible .sc-settings-card {
+  transform: scale(1) translateY(0);
+}
+
+/* Modal Header */
+.sc-modal-header {
+  padding: 18px 24px 14px 24px;
+  border-bottom: 1px solid var(--sc-border-subtle);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.sc-modal-title-group h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--sc-text-primary);
+  letter-spacing: -0.01em;
+}
+
+.sc-modal-title-group p {
+  margin: 4px 0 0 0;
+  font-size: 12px;
+  color: var(--sc-text-muted);
+}
+
+.sc-modal-close-btn {
+  background: transparent;
+  border: none;
+  color: var(--sc-text-muted);
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.12s ease;
+}
+
+.sc-modal-close-btn:hover {
+  background: var(--sc-bg-surface-elevated);
+  color: var(--sc-text-primary);
+}
+
+/* Modal Scrollable Body */
+.sc-modal-body {
+  padding: 20px 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.sc-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sc-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--sc-text-muted);
+  margin: 0 0 2px 0;
+}
+
+/* Setting item row */
+.sc-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--sc-bg-surface-elevated);
+  border: 1px solid var(--sc-border-subtle);
+  border-radius: 8px;
+  padding: 12px 16px;
+  gap: 16px;
+  transition: border-color 0.15s ease;
+}
+
+.sc-setting-row:hover {
+  border-color: var(--sc-border-medium);
+}
+
+.sc-setting-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sc-setting-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--sc-text-primary);
+}
+
+.sc-setting-desc {
+  font-size: 11px;
+  color: var(--sc-text-muted);
+  line-height: 1.4;
+}
+
+/* Inputs within settings */
+.sc-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--sc-bg-surface-elevated);
+  border: 1px solid var(--sc-border-subtle);
+  border-radius: 8px;
+  padding: 12px 16px;
+}
+
+.sc-input-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sc-input-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--sc-text-primary);
+}
+
+/* Proxy protocol pill selectors */
+.sc-protocol-pills {
+  display: flex;
+  gap: 4px;
+}
+
+.sc-protocol-pill {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--sc-border-subtle);
+  color: var(--sc-text-secondary);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.sc-protocol-pill:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--sc-text-primary);
+}
+
+.sc-protocol-pill.active {
+  background: var(--sc-brand-orange-dim);
+  border-color: var(--sc-brand-orange);
+  color: #ff9d66;
+}
+
+.sc-text-input {
+  background: var(--sc-bg-input);
+  border: 1px solid var(--sc-border-subtle);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--sc-text-primary);
+  font-family: monospace, var(--sc-font-sans);
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.sc-text-input:focus {
+  border-color: var(--sc-border-focus);
+  box-shadow: 0 0 0 2px var(--sc-brand-orange-dim);
+}
+
+.sc-input-hint {
+  font-size: 11px;
+  color: var(--sc-text-muted);
+}
+
+/* Switch Toggle Component */
+.sc-switch {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.sc-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.sc-switch-slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background-color: #27272e;
+  border-radius: 22px;
+  transition: background-color 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  border: 1px solid var(--sc-border-subtle);
+}
+
+.sc-switch-slider::before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 2px;
+  bottom: 2px;
+  background-color: #d1d1d8;
+  border-radius: 50%;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.sc-switch input:checked + .sc-switch-slider {
+  background-color: var(--sc-brand-orange);
+  border-color: var(--sc-brand-orange-hover);
+}
+
+.sc-switch input:checked + .sc-switch-slider::before {
+  transform: translateX(18px);
+  background-color: #ffffff;
+}
+
+/* Notice box for proxy restart requirement */
+.sc-notice-banner {
+  background: rgba(255, 85, 0, 0.08);
+  border: 1px solid var(--sc-brand-orange-border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 11px;
+  color: #ff9d66;
+  line-height: 1.4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Updater UI Row in Settings */
+.sc-updater-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--sc-bg-surface-elevated);
+  border: 1px solid var(--sc-border-subtle);
+  border-radius: 8px;
+  padding: 12px 16px;
+  gap: 16px;
+}
+
+.sc-updater-status {
+  font-size: 11px;
+  color: var(--sc-text-muted);
+}
+
+.sc-updater-status.highlight {
+  color: #34d399;
+}
+
+/* Modal Footer */
+.sc-modal-footer {
+  padding: 14px 24px;
+  border-top: 1px solid var(--sc-border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.sc-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sc-btn {
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  outline: none;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.sc-btn-sm {
+  padding: 4px 10px;
+  font-size: 11px;
+  border-radius: 4px;
+}
+
+.sc-btn-secondary {
+  background: var(--sc-bg-surface-elevated);
+  border: 1px solid var(--sc-border-medium);
+  color: var(--sc-text-secondary);
+}
+
+.sc-btn-secondary:hover {
+  background: var(--sc-bg-surface-hover);
+  color: var(--sc-text-primary);
+}
+
+.sc-btn-primary {
+  background: var(--sc-brand-orange);
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(255, 85, 0, 0.35);
+}
+
+.sc-btn-primary:hover {
+  background: var(--sc-brand-orange-hover);
+  box-shadow: 0 4px 12px rgba(255, 85, 0, 0.45);
+}
+
+.sc-btn-primary:active {
+  background: var(--sc-brand-orange-active);
+  transform: translateY(1px);
+}
+
+.sc-btn-restart {
+  background: transparent;
+  border: 1px solid var(--sc-brand-orange-border);
+  color: #ff7f36;
+}
+
+.sc-btn-restart:hover {
+  background: var(--sc-brand-orange-dim);
+  color: #ff9d66;
+}
+
+/* Toast feedback inside modal */
+.sc-toast {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: #1e1e24;
+  border: 1px solid var(--sc-border-medium);
+  color: var(--sc-text-primary);
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 12px;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 1000001;
+}
+
+.sc-toast.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ==========================================================================
+   SoundCloud AdBlocker Styling
+   ========================================================================== */
+
+body.sc-adblock-enabled .soundBadge__promoted,
+body.sc-adblock-enabled .soundBadge__ad,
+body.sc-adblock-enabled .promotedSoundsModule,
+body.sc-adblock-enabled .sidebarModule__ad,
+body.sc-adblock-enabled .playControls__banner,
+body.sc-adblock-enabled .header__upsell,
+body.sc-adblock-enabled .modal__upsell,
+body.sc-adblock-enabled .upsellBanner,
+body.sc-adblock-enabled .trackUpsell,
+body.sc-adblock-enabled .m-upsell,
+body.sc-adblock-enabled .mobileAppsBanner,
+body.sc-adblock-enabled .announcementBanner,
+body.sc-adblock-enabled .streamSidebar__promoted,
+body.sc-adblock-enabled div[data-testid="ad-item"],
+body.sc-adblock-enabled div[data-testid="sidebar-ad"],
+body.sc-adblock-enabled .nativeAudioAd {
+  display: none !important;
+  visibility: hidden !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* ==========================================================================
+   SoundCloud Deep Dark Theme
+   High-contrast charcoal & midnight surfaces, preserving artwork and waveforms.
+   ========================================================================== */
+
+html.sc-dark-theme,
+body.sc-dark-theme {
+  background-color: #0f0f11 !important;
+  color: #e4e4e7 !important;
+}
+
+/* Main background containers */
+body.sc-dark-theme #content,
+body.sc-dark-theme .l-container,
+body.sc-dark-theme .l-listen-hero,
+body.sc-dark-theme .listenDetails,
+body.sc-dark-theme .l-fluid-content,
+body.sc-dark-theme .sc-selection-content {
+  background-color: #0f0f11 !important;
+}
+
+/* Top SoundCloud header */
+body.sc-dark-theme .header,
+body.sc-dark-theme #header {
+  background: #141416 !important;
+  border-bottom: 1px solid #222226 !important;
+}
+
+body.sc-dark-theme .header__navMenu a,
+body.sc-dark-theme .header__link {
+  color: #a1a1aa !important;
+}
+
+body.sc-dark-theme .header__navMenu a.selected,
+body.sc-dark-theme .header__navMenu a:hover {
+  color: #ffffff !important;
+}
+
+body.sc-dark-theme .headerSearch__input {
+  background: #1a1a1e !important;
+  border: 1px solid #2a2a30 !important;
+  color: #f4f4f5 !important;
+}
+
+/* Player bar at bottom */
+body.sc-dark-theme .playControls,
+body.sc-dark-theme .playControls__wrapper,
+body.sc-dark-theme .playControls__bg {
+  background: #141417 !important;
+  border-top: 1px solid #242429 !important;
+}
+
+body.sc-dark-theme .playbackSoundBadge__titleLink {
+  color: #f4f4f5 !important;
+}
+
+body.sc-dark-theme .playbackSoundBadge__lightLink {
+  color: #a1a1aa !important;
+}
+
+body.sc-dark-theme .playbackTimeline__timePassed,
+body.sc-dark-theme .playbackTimeline__duration {
+  color: #71717a !important;
+}
+
+/* Track cards, rows, badges */
+body.sc-dark-theme .sound__body,
+body.sc-dark-theme .trackItem,
+body.sc-dark-theme .trackList__item {
+  background-color: transparent !important;
+}
+
+body.sc-dark-theme .soundList__item {
+  border-bottom: 1px solid #1c1c20 !important;
+}
+
+body.sc-dark-theme .trackItem:hover,
+body.sc-dark-theme .trackItem.active {
+  background-color: #18181c !important;
+}
+
+body.sc-dark-theme .sidebarModule {
+  background-color: #141417 !important;
+  border: 1px solid #222226 !important;
+  border-radius: 8px !important;
+  padding: 14px !important;
+}
+
+body.sc-dark-theme .sidebarModule .sidebarHeader {
+  border-bottom: 1px solid #222226 !important;
+}
+
+/* Comments, user rows, inputs */
+body.sc-dark-theme .commentForm__wrapper,
+body.sc-dark-theme .commentForm__input {
+  background-color: #18181c !important;
+  border-color: #27272a !important;
+  color: #f4f4f5 !important;
+}
+
+/* Buttons in dark theme */
+body.sc-dark-theme .sc-button-medium,
+body.sc-dark-theme .sc-button-small {
+  background-color: #1a1a1f !important;
+  border-color: #2a2a30 !important;
+  color: #e4e4e7 !important;
+}
+
+body.sc-dark-theme .sc-button-medium:hover,
+body.sc-dark-theme .sc-button-small:hover {
+  background-color: #24242a !important;
+  color: #ffffff !important;
+}
+
+/* Waveform Canvas & Artwork: MUST PRESERVE VISIBILITY & ORIGINAL COLORS */
+body.sc-dark-theme .waveformCommentsNode,
+body.sc-dark-theme .waveformCommentsNode canvas {
+  filter: none !important;
+  opacity: 0.95;
+}
+
+body.sc-dark-theme .sc-artwork,
+body.sc-dark-theme .image__light,
+body.sc-dark-theme .visualSound__wrapper,
+body.sc-dark-theme img {
+  filter: none !important;
+}

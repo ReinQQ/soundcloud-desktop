@@ -17,6 +17,7 @@ use tauri::{
 };
 
 pub const INJECTED_SCRIPT: &str = include_str!("../injected.js");
+const CHROME_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -45,24 +46,20 @@ pub fn run() {
             );
             app.manage(rpc_handle);
 
-            // Build main window
-            let mut window_builder = WebviewWindowBuilder::new(
-                app,
-                "main",
-                WebviewUrl::External("https://soundcloud.com".parse().expect("Valid SoundCloud URL")),
-            )
-            .title("SoundCloud")
-            .inner_size(1280.0, 800.0)
-            .min_inner_size(860.0, 540.0)
-            .decorations(false)
-            .initialization_script(INJECTED_SCRIPT);
+            // Resolve WebView2 data directory to prevent locked state / environment collisions
+            let webview2_dir = app.path().app_local_data_dir().ok().map(|d| {
+                let dir = d.join("webview2");
+                let _ = std::fs::create_dir_all(&dir);
+                dir
+            });
 
-            // Isolate WebView2 data directory to prevent locked state / environment collisions
-            if let Ok(local_data) = app.path().app_local_data_dir() {
-                let webview2_dir = local_data.join("webview2");
-                let _ = std::fs::create_dir_all(&webview2_dir);
-                window_builder = window_builder.data_directory(webview2_dir);
-            }
+            #[cfg(windows)]
+            let mut browser_args: Vec<String> = vec![
+                "--disable-popup-blocking".to_string(),
+                "--disable-blink-features=AutomationControlled".to_string(),
+            ];
+            #[cfg(not(windows))]
+            let mut non_windows_proxy_url: Option<url::Url> = None;
 
             // Apply webview proxy if enabled and valid
             if initial_settings.proxy_enabled {
@@ -75,12 +72,11 @@ pub fn run() {
                                     log::info!("Connecting WebView through local proxy bridge: {proxy_server} (upstream: {parsed_url})");
                                     #[cfg(windows)]
                                     {
-                                        window_builder = window_builder.additional_browser_args(&format!("--proxy-server={proxy_server}"));
+                                        browser_args.push(format!("--proxy-server={proxy_server}"));
                                     }
                                     #[cfg(not(windows))]
                                     {
-                                        let local_url = bridge.local_http_url();
-                                        window_builder = window_builder.proxy_url(local_url);
+                                        non_windows_proxy_url = Some(bridge.local_http_url());
                                     }
                                     proxy_bridge_handle = Some(bridge);
                                     is_proxy_active = true;
@@ -94,11 +90,11 @@ pub fn run() {
                             log::info!("Configuring direct WebView proxy: {proxy_str}");
                             #[cfg(windows)]
                             {
-                                window_builder = window_builder.additional_browser_args(&format!("--proxy-server={proxy_str}"));
+                                browser_args.push(format!("--proxy-server={proxy_str}"));
                             }
                             #[cfg(not(windows))]
                             {
-                                window_builder = window_builder.proxy_url(parsed_url);
+                                non_windows_proxy_url = Some(parsed_url);
                             }
                             is_proxy_active = true;
                         }
@@ -107,6 +103,100 @@ pub fn run() {
                         log::warn!("Proxy enabled but URL invalid: {e}");
                     }
                 }
+            }
+
+            #[cfg(windows)]
+            let browser_args_str = browser_args.join(" ");
+
+            // Build main window
+            let app_handle_for_popup = app.handle().clone();
+            let webview2_dir_for_popup = webview2_dir.clone();
+            #[cfg(windows)]
+            let browser_args_for_popup = browser_args_str.clone();
+            #[cfg(not(windows))]
+            let non_windows_proxy_for_popup = non_windows_proxy_url.clone();
+
+            let mut window_builder = WebviewWindowBuilder::new(
+                app,
+                "main",
+                WebviewUrl::External("https://soundcloud.com".parse().expect("Valid SoundCloud URL")),
+            )
+            .title("SoundCloud")
+            .user_agent(CHROME_USER_AGENT)
+            .inner_size(1280.0, 800.0)
+            .min_inner_size(860.0, 540.0)
+            .decorations(false)
+            .initialization_script(INJECTED_SCRIPT)
+            .on_new_window(move |url, features| {
+                let label = format!(
+                    "oauth-{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
+                );
+                let popup_app = app_handle_for_popup.clone();
+                let popup_label = label.clone();
+                let mut builder = WebviewWindowBuilder::new(
+                    &app_handle_for_popup,
+                    label,
+                    WebviewUrl::External(url),
+                )
+                .window_features(features)
+                .title("Sign in - SoundCloud")
+                .user_agent(CHROME_USER_AGENT)
+                .initialization_script(INJECTED_SCRIPT)
+                .on_navigation(move |nav_url| {
+                    if nav_url.host_str() == Some("close.scdesktop.invalid") {
+                        if let Some(w) = popup_app.get_webview_window(&popup_label) {
+                            let _ = w.destroy();
+                        }
+                        return false;
+                    }
+                    true
+                });
+
+                if let Some(ref dir) = webview2_dir_for_popup {
+                    builder = builder.data_directory(dir.clone());
+                }
+
+                #[cfg(windows)]
+                {
+                    builder = builder.additional_browser_args(&browser_args_for_popup);
+                }
+                #[cfg(not(windows))]
+                if let Some(ref url) = non_windows_proxy_for_popup {
+                    builder = builder.proxy_url(url.clone());
+                }
+
+                match builder.build() {
+                    Ok(win) => {
+                        let win_clone = win.clone();
+                        win.on_window_event(move |event| {
+                            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                                let _ = win_clone.destroy();
+                            }
+                        });
+                        tauri::webview::NewWindowResponse::Create { window: win }
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to open OAuth popup window: {e}");
+                        tauri::webview::NewWindowResponse::Deny
+                    }
+                }
+            });
+
+            if let Some(ref dir) = webview2_dir {
+                window_builder = window_builder.data_directory(dir.clone());
+            }
+
+            #[cfg(windows)]
+            {
+                window_builder = window_builder.additional_browser_args(&browser_args_str);
+            }
+            #[cfg(not(windows))]
+            if let Some(ref url) = non_windows_proxy_url {
+                window_builder = window_builder.proxy_url(url.clone());
             }
 
             initial_settings.proxy_active = is_proxy_active;

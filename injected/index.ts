@@ -6,8 +6,42 @@ import { AdBlocker } from './adblocker';
 import { Scraper } from './scraper';
 
 (function initSoundCloudDesktop() {
-  // Prevent injection inside iframes (e.g. SoundCloud auth or tracking iframes)
+  // Mask WebView2 brand in navigator.userAgentData for OAuth providers
+  try {
+    const uaData = (navigator as any).userAgentData;
+    if (uaData && Array.isArray(uaData.brands)) {
+      const cleanBrands = uaData.brands.filter(
+        (b: { brand?: string }) => !String(b.brand || '').toLowerCase().includes('webview')
+      );
+      Object.defineProperty(navigator, 'userAgentData', {
+        value: new Proxy(uaData, {
+          get(target, prop) {
+            if (prop === 'brands') return cleanBrands;
+            const val = Reflect.get(target, prop);
+            return typeof val === 'function' ? val.bind(target) : val;
+          },
+        }),
+        configurable: true,
+      });
+    }
+  } catch {}
+
+  // Prevent injection inside iframes
   if (window.top !== window.self) {
+    return;
+  }
+
+  // Handle OAuth popup windows (Google, Apple, Facebook): bridge window.close() to Tauri
+  if (window.opener !== null) {
+    const nativeClose = window.close.bind(window);
+    window.close = function () {
+      try {
+        window.location.href = 'https://close.scdesktop.invalid/';
+      } catch {}
+      try {
+        nativeClose();
+      } catch {}
+    };
     return;
   }
 

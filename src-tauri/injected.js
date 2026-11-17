@@ -855,63 +855,66 @@
     }
     return false;
   }
-  var isAdBlockingActive, originalFetch, originalXhrOpen, originalXhrSend, AdBlocker;
+  var isAdBlockingActive, isMainWindow, AdBlocker;
   var init_adblocker = __esm({
     "injected/adblocker.ts"() {
       isAdBlockingActive = true;
-      originalFetch = window.fetch;
-      window.fetch = async function(input, init) {
-        if (isAdBlockingActive && isAdUrl(input)) {
-          const urlText = typeof input === "string" ? input : input.url || "";
-          console.log("[SC-Desktop] AdBlock intercepted ad request:", urlText);
-          return new Response("{}", {
-            status: 200,
-            statusText: "OK",
-            headers: {
-              "Content-Type": "application/json",
-              "X-AdBlock-Intercepted": "true"
-            }
-          });
-        }
-        return originalFetch.apply(this, [input, init]);
-      };
-      originalXhrOpen = XMLHttpRequest.prototype.open;
-      originalXhrSend = XMLHttpRequest.prototype.send;
-      XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-        if (isAdBlockingActive && isAdUrl(url)) {
-          this.__is_ad_blocked = true;
-          console.log("[SC-Desktop] AdBlock intercepted XHR ad request:", url.toString());
-        }
-        return originalXhrOpen.apply(this, [method, url, ...rest]);
-      };
-      XMLHttpRequest.prototype.send = function(body) {
-        if (this.__is_ad_blocked) {
-          Object.defineProperty(this, "readyState", { value: 4, writable: true, configurable: true });
-          Object.defineProperty(this, "status", { value: 200, writable: true, configurable: true });
-          Object.defineProperty(this, "statusText", { value: "OK", writable: true, configurable: true });
-          Object.defineProperty(this, "response", { value: "{}", writable: true, configurable: true });
-          Object.defineProperty(this, "responseText", { value: "{}", writable: true, configurable: true });
-          queueMicrotask(() => {
-            const readystateEvent = new Event("readystatechange");
-            this.dispatchEvent(readystateEvent);
-            if (typeof this.onreadystatechange === "function") {
-              this.onreadystatechange(readystateEvent);
-            }
-            const loadEvent = new ProgressEvent("load");
-            this.dispatchEvent(loadEvent);
-            if (typeof this.onload === "function") {
-              this.onload(loadEvent);
-            }
-            const loadEndEvent = new ProgressEvent("loadend");
-            this.dispatchEvent(loadEndEvent);
-            if (typeof this.onloadend === "function") {
-              this.onloadend(loadEndEvent);
-            }
-          });
-          return;
-        }
-        return originalXhrSend.apply(this, arguments);
-      };
+      isMainWindow = typeof window !== "undefined" && window.top === window.self && window.opener === null;
+      if (isMainWindow) {
+        const originalFetch = window.fetch;
+        window.fetch = async function(input, init) {
+          if (isAdBlockingActive && isAdUrl(input)) {
+            const urlText = typeof input === "string" ? input : input.url || "";
+            console.log("[SC-Desktop] AdBlock intercepted ad request:", urlText);
+            return new Response("{}", {
+              status: 200,
+              statusText: "OK",
+              headers: {
+                "Content-Type": "application/json",
+                "X-AdBlock-Intercepted": "true"
+              }
+            });
+          }
+          return originalFetch.apply(this, [input, init]);
+        };
+        const originalXhrOpen = XMLHttpRequest.prototype.open;
+        const originalXhrSend = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+          if (isAdBlockingActive && isAdUrl(url)) {
+            this.__is_ad_blocked = true;
+            console.log("[SC-Desktop] AdBlock intercepted XHR ad request:", url.toString());
+          }
+          return originalXhrOpen.apply(this, [method, url, ...rest]);
+        };
+        XMLHttpRequest.prototype.send = function(body) {
+          if (this.__is_ad_blocked) {
+            Object.defineProperty(this, "readyState", { value: 4, writable: true, configurable: true });
+            Object.defineProperty(this, "status", { value: 200, writable: true, configurable: true });
+            Object.defineProperty(this, "statusText", { value: "OK", writable: true, configurable: true });
+            Object.defineProperty(this, "response", { value: "{}", writable: true, configurable: true });
+            Object.defineProperty(this, "responseText", { value: "{}", writable: true, configurable: true });
+            queueMicrotask(() => {
+              const readystateEvent = new Event("readystatechange");
+              this.dispatchEvent(readystateEvent);
+              if (typeof this.onreadystatechange === "function") {
+                this.onreadystatechange(readystateEvent);
+              }
+              const loadEvent = new ProgressEvent("load");
+              this.dispatchEvent(loadEvent);
+              if (typeof this.onload === "function") {
+                this.onload(loadEvent);
+              }
+              const loadEndEvent = new ProgressEvent("loadend");
+              this.dispatchEvent(loadEndEvent);
+              if (typeof this.onloadend === "function") {
+                this.onloadend(loadEndEvent);
+              }
+            });
+            return;
+          }
+          return originalXhrSend.apply(this, arguments);
+        };
+      }
       AdBlocker = class {
         constructor(initialEnabled, callbacks) {
           __publicField(this, "callbacks", callbacks);
@@ -1182,7 +1185,40 @@
       init_adblocker();
       init_scraper();
       (function initSoundCloudDesktop() {
+        try {
+          const uaData = navigator.userAgentData;
+          if (uaData && Array.isArray(uaData.brands)) {
+            const cleanBrands = uaData.brands.filter(
+              (b) => !String(b.brand || "").toLowerCase().includes("webview")
+            );
+            Object.defineProperty(navigator, "userAgentData", {
+              value: new Proxy(uaData, {
+                get(target, prop) {
+                  if (prop === "brands") return cleanBrands;
+                  const val = Reflect.get(target, prop);
+                  return typeof val === "function" ? val.bind(target) : val;
+                }
+              }),
+              configurable: true
+            });
+          }
+        } catch {
+        }
         if (window.top !== window.self) {
+          return;
+        }
+        if (window.opener !== null) {
+          const nativeClose = window.close.bind(window);
+          window.close = function() {
+            try {
+              window.location.href = "https://close.scdesktop.invalid/";
+            } catch {
+            }
+            try {
+              nativeClose();
+            } catch {
+            }
+          };
           return;
         }
         if (window.__SC_DESKTOP_INITIALIZED__) {

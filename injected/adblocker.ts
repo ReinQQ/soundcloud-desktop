@@ -75,74 +75,82 @@ function isAdUrl(url: string | URL | Request): boolean {
 // Global flag to control network-level interception
 let isAdBlockingActive = true;
 
-// Wrap window.fetch to safely intercept dedicated audio-ad requests
-const originalFetch = window.fetch;
-window.fetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  if (isAdBlockingActive && isAdUrl(input)) {
-    const urlText = typeof input === 'string' ? input : (input as any).url || '';
-    console.log('[SC-Desktop] AdBlock intercepted ad request:', urlText);
-    return new Response('{}', {
-      status: 200,
-      statusText: 'OK',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-AdBlock-Intercepted': 'true',
-      },
-    });
-  }
-  return originalFetch.apply(this, [input, init] as any);
-};
+// Only attach network-level interception in the main application window (never in OAuth popups)
+const isMainWindow =
+  typeof window !== 'undefined' &&
+  window.top === window.self &&
+  window.opener === null;
 
-// Wrap XMLHttpRequest to safely intercept dedicated ad requests
-const originalXhrOpen = XMLHttpRequest.prototype.open;
-const originalXhrSend = XMLHttpRequest.prototype.send;
+if (isMainWindow) {
+  // Wrap window.fetch to safely intercept dedicated audio-ad requests
+  const originalFetch = window.fetch;
+  window.fetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    if (isAdBlockingActive && isAdUrl(input)) {
+      const urlText = typeof input === 'string' ? input : (input as any).url || '';
+      console.log('[SC-Desktop] AdBlock intercepted ad request:', urlText);
+      return new Response('{}', {
+        status: 200,
+        statusText: 'OK',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-AdBlock-Intercepted': 'true',
+        },
+      });
+    }
+    return originalFetch.apply(this, [input, init] as any);
+  };
 
-(XMLHttpRequest.prototype as any).open = function (
-  this: XMLHttpRequest & { __is_ad_blocked?: boolean },
-  method: string,
-  url: string | URL,
-  ...rest: any[]
-) {
-  if (isAdBlockingActive && isAdUrl(url)) {
-    this.__is_ad_blocked = true;
-    console.log('[SC-Desktop] AdBlock intercepted XHR ad request:', url.toString());
-  }
-  return originalXhrOpen.apply(this, [method, url, ...rest] as any);
-};
+  // Wrap XMLHttpRequest to safely intercept dedicated ad requests
+  const originalXhrOpen = XMLHttpRequest.prototype.open;
+  const originalXhrSend = XMLHttpRequest.prototype.send;
 
-(XMLHttpRequest.prototype as any).send = function (
-  this: XMLHttpRequest & { __is_ad_blocked?: boolean },
-  body?: Document | XMLHttpRequestBodyInit | null
-) {
-  if (this.__is_ad_blocked) {
-    // Return empty 200 OK JSON response without touching the network
-    Object.defineProperty(this, 'readyState', { value: 4, writable: true, configurable: true });
-    Object.defineProperty(this, 'status', { value: 200, writable: true, configurable: true });
-    Object.defineProperty(this, 'statusText', { value: 'OK', writable: true, configurable: true });
-    Object.defineProperty(this, 'response', { value: '{}', writable: true, configurable: true });
-    Object.defineProperty(this, 'responseText', { value: '{}', writable: true, configurable: true });
+  (XMLHttpRequest.prototype as any).open = function (
+    this: XMLHttpRequest & { __is_ad_blocked?: boolean },
+    method: string,
+    url: string | URL,
+    ...rest: any[]
+  ) {
+    if (isAdBlockingActive && isAdUrl(url)) {
+      this.__is_ad_blocked = true;
+      console.log('[SC-Desktop] AdBlock intercepted XHR ad request:', url.toString());
+    }
+    return originalXhrOpen.apply(this, [method, url, ...rest] as any);
+  };
 
-    queueMicrotask(() => {
-      const readystateEvent = new Event('readystatechange');
-      this.dispatchEvent(readystateEvent);
-      if (typeof this.onreadystatechange === 'function') {
-        this.onreadystatechange(readystateEvent);
-      }
-      const loadEvent = new ProgressEvent('load');
-      this.dispatchEvent(loadEvent);
-      if (typeof this.onload === 'function') {
-        this.onload(loadEvent);
-      }
-      const loadEndEvent = new ProgressEvent('loadend');
-      this.dispatchEvent(loadEndEvent);
-      if (typeof this.onloadend === 'function') {
-        this.onloadend(loadEndEvent);
-      }
-    });
-    return;
-  }
-  return originalXhrSend.apply(this, arguments as any);
-};
+  (XMLHttpRequest.prototype as any).send = function (
+    this: XMLHttpRequest & { __is_ad_blocked?: boolean },
+    body?: Document | XMLHttpRequestBodyInit | null
+  ) {
+    if (this.__is_ad_blocked) {
+      // Return empty 200 OK JSON response without touching the network
+      Object.defineProperty(this, 'readyState', { value: 4, writable: true, configurable: true });
+      Object.defineProperty(this, 'status', { value: 200, writable: true, configurable: true });
+      Object.defineProperty(this, 'statusText', { value: 'OK', writable: true, configurable: true });
+      Object.defineProperty(this, 'response', { value: '{}', writable: true, configurable: true });
+      Object.defineProperty(this, 'responseText', { value: '{}', writable: true, configurable: true });
+
+      queueMicrotask(() => {
+        const readystateEvent = new Event('readystatechange');
+        this.dispatchEvent(readystateEvent);
+        if (typeof this.onreadystatechange === 'function') {
+          this.onreadystatechange(readystateEvent);
+        }
+        const loadEvent = new ProgressEvent('load');
+        this.dispatchEvent(loadEvent);
+        if (typeof this.onload === 'function') {
+          this.onload(loadEvent);
+        }
+        const loadEndEvent = new ProgressEvent('loadend');
+        this.dispatchEvent(loadEndEvent);
+        if (typeof this.onloadend === 'function') {
+          this.onloadend(loadEndEvent);
+        }
+      });
+      return;
+    }
+    return originalXhrSend.apply(this, arguments as any);
+  };
+}
 
 export class AdBlocker {
   private enabled: boolean = false;

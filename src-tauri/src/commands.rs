@@ -147,6 +147,11 @@ pub fn clear_discord_rpc(rpc: State<'_, DiscordRpcHandle>) -> Result<(), String>
 }
 
 #[tauri::command]
+pub fn get_discord_rpc_status(rpc: State<'_, DiscordRpcHandle>) -> String {
+    rpc.get_status()
+}
+
+#[tauri::command]
 pub fn window_action(
     window: WebviewWindow,
     settings: State<'_, Arc<RwLock<AppSettings>>>,

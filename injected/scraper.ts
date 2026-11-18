@@ -4,6 +4,8 @@ import { clearDiscordPresence, sendTrackToDiscord } from './ipc';
 export class Scraper {
   private lastSentTrack: TrackMetadata | null = null;
   private observer: MutationObserver | null = null;
+  private observedPlayer: HTMLElement | null = null;
+  private attachObserverRetryTimer: number | null = null;
   private syncTimer: number | null = null;
   private immediateDebounceTimer: number | null = null;
   private lastSentTime: number = 0;
@@ -29,8 +31,9 @@ export class Scraper {
 
   private registerGlobalControls(): void {
     (window as any).__sc_toggle_playback = () => {
-      const playBtn = document.querySelector<HTMLButtonElement>(
-        '.playControls .playControls__play, .playControls button.playControl, button.playControl'
+      const player = document.querySelector<HTMLElement>('.playControls');
+      const playBtn = player?.querySelector<HTMLButtonElement>(
+        '.playControls__play, button.playControl'
       );
       if (playBtn) {
         playBtn.click();
@@ -38,8 +41,9 @@ export class Scraper {
     };
 
     (window as any).__sc_next_track = () => {
-      const nextBtn = document.querySelector<HTMLButtonElement>(
-        '.playControls .skipControl__next, .playControls button.skipControl__next, button.skipControl__next'
+      const player = document.querySelector<HTMLElement>('.playControls');
+      const nextBtn = player?.querySelector<HTMLButtonElement>(
+        '.skipControl__next, button.skipControl__next'
       );
       if (nextBtn) {
         nextBtn.click();
@@ -61,65 +65,96 @@ export class Scraper {
   }
 
   private initObserver(): void {
-    const attachObserver = () => {
-      const target = document.body;
-      if (!target) {
-        window.setTimeout(attachObserver, 50);
+    const tryAttach = () => {
+      const player = document.querySelector<HTMLElement>('.playControls');
+      if (!player) {
+        if (this.attachObserverRetryTimer === null) {
+          this.attachObserverRetryTimer = window.setInterval(() => {
+            const el = document.querySelector<HTMLElement>('.playControls');
+            if (el) {
+              if (this.attachObserverRetryTimer !== null) {
+                window.clearInterval(this.attachObserverRetryTimer);
+                this.attachObserverRetryTimer = null;
+              }
+              this.observePlayer(el);
+            }
+          }, 500);
+        }
         return;
       }
 
-      this.observer = new MutationObserver((mutations) => {
-        let relevantMutation = false;
-        for (const m of mutations) {
-          if (
-            m.type === 'childList' ||
-            (m.type === 'attributes' &&
-              (m.attributeName === 'class' ||
-                m.attributeName === 'title' ||
-                m.attributeName === 'aria-label' ||
-                m.attributeName === 'href'))
-          ) {
-            relevantMutation = true;
-            break;
-          }
-        }
-
-        if (relevantMutation) {
-          this.triggerImmediate();
-        }
-      });
-
-      this.observer.observe(target, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: [
-          'class',
-          'style',
-          'title',
-          'aria-label',
-          'aria-valuenow',
-          'aria-valuemax',
-          'href',
-        ],
-      });
+      if (this.attachObserverRetryTimer !== null) {
+        window.clearInterval(this.attachObserverRetryTimer);
+        this.attachObserverRetryTimer = null;
+      }
+      this.observePlayer(player);
     };
 
     if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', attachObserver);
+      document.addEventListener('DOMContentLoaded', tryAttach);
     } else {
-      attachObserver();
+      tryAttach();
     }
+  }
+
+  private observePlayer(player: HTMLElement): void {
+    if (this.observer) {
+      this.observer.disconnect();
+    }
+
+    this.observedPlayer = player;
+
+    this.observer = new MutationObserver((mutations) => {
+      let relevantMutation = false;
+      for (const m of mutations) {
+        if (
+          m.type === 'childList' ||
+          (m.type === 'attributes' &&
+            (m.attributeName === 'class' ||
+              m.attributeName === 'title' ||
+              m.attributeName === 'aria-label' ||
+              m.attributeName === 'href'))
+        ) {
+          relevantMutation = true;
+          break;
+        }
+      }
+
+      if (relevantMutation) {
+        this.triggerImmediate();
+      }
+    });
+
+    this.observer.observe(player, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: [
+        'class',
+        'style',
+        'title',
+        'aria-label',
+        'aria-valuenow',
+        'aria-valuemax',
+        'href',
+      ],
+    });
+
+    this.triggerImmediate();
   }
 
   private startInterval(): void {
     if (this.syncTimer) {
       window.clearInterval(this.syncTimer);
     }
-    // Routine timestamp sync every 5 seconds (not 1 second)
+    // Lightweight 2000ms safety poll alongside MutationObserver
     this.syncTimer = window.setInterval(() => {
+      const player = document.querySelector<HTMLElement>('.playControls');
+      if (player && (!this.observedPlayer || !this.observedPlayer.isConnected || this.observedPlayer !== player)) {
+        this.observePlayer(player);
+      }
       this.syncNow(false);
-    }, 5000);
+    }, 2000);
   }
 
   /**
@@ -245,12 +280,9 @@ export class Scraper {
       const match = bg.match(/url\(["']?(https:\/\/[^"')]+)["']?\)/i);
       if (match && match[1]) {
         let rawUrl = match[1];
-        // Upgrade low-res thumbnails to 500x500 high-res artwork
+        // Upgrade low-res thumbnails (-t50x50, -t120x120, -t200x200) to 500x500 high-res artwork
         rawUrl = rawUrl.replace(/-t(50|120|200)x\1\./, '-t500x500.');
-        if (
-          rawUrl.startsWith('https://i1.sndcdn.com/') ||
-          rawUrl.startsWith('https://a1.sndcdn.com/')
-        ) {
+        if (rawUrl.startsWith('https://')) {
           cover_url = rawUrl;
           break;
         }

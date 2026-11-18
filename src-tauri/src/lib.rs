@@ -4,8 +4,8 @@ mod proxy_bridge;
 mod settings;
 
 use commands::{
-    check_update, clear_discord_rpc, get_settings, install_update, restart_app, save_settings,
-    update_discord_rpc, window_action,
+    check_update, clear_discord_rpc, get_discord_rpc_status, get_settings, install_update,
+    restart_app, save_settings, update_discord_rpc, window_action,
 };
 use discord_rpc::DiscordRpcHandle;
 use settings::AppSettings;
@@ -23,13 +23,17 @@ const CHROME_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Apple
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            if cfg!(debug_assertions) {
-                let _ = app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                );
-            }
+            let _ = app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .targets([
+                        tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                        tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir { file_name: None }),
+                    ])
+                    .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(5))
+                    .max_file_size(1_000_000)
+                    .level(log::LevelFilter::Info)
+                    .build(),
+            );
 
             let _ = app.handle().plugin(tauri_plugin_process::init());
             let _ = app.handle().plugin(tauri_plugin_updater::Builder::new().build());
@@ -306,6 +310,7 @@ pub fn run() {
             save_settings,
             update_discord_rpc,
             clear_discord_rpc,
+            get_discord_rpc_status,
             window_action,
             restart_app,
             check_update,

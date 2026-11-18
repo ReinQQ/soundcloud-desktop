@@ -1,6 +1,6 @@
 {
   "name": "scdesktop",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "SoundCloud Native Desktop Client using Tauri v2",
   "main": "index.js",
   "scripts": {

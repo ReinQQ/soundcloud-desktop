@@ -37,6 +37,10 @@ export async function clearDiscordPresence(): Promise<void> {
   return invokeTauri<void>('clear_discord_rpc');
 }
 
+export async function getDiscordRpcStatus(): Promise<string> {
+  return invokeTauri<string>('get_discord_rpc_status');
+}
+
 export async function sendWindowAction(action: 'minimize' | 'maximize' | 'toggle_maximize' | 'close'): Promise<void> {
   return invokeTauri<void>('window_action', { action });
 }

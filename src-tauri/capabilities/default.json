@@ -16,6 +16,7 @@
     "core:window:allow-start-dragging",
     "allow-update-discord-rpc",
     "allow-clear-discord-rpc",
+    "allow-get-discord-rpc-status",
     "allow-get-settings",
     "allow-save-settings",
     "allow-window-action",

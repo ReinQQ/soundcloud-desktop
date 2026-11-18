@@ -1,5 +1,12 @@
 import { AppSettings, UpdateInfo } from './types';
-import { checkUpdate, fetchSettings, installUpdate, persistSettings, requestAppRestart } from './ipc';
+import {
+  checkUpdate,
+  fetchSettings,
+  getDiscordRpcStatus,
+  installUpdate,
+  persistSettings,
+  requestAppRestart,
+} from './ipc';
 
 export interface SettingsModalCallbacks {
   onSettingsChanged: (newSettings: AppSettings) => void;
@@ -29,6 +36,10 @@ export class SettingsModal {
   private selectedProtocol: string = 'socks5';
   private protocolPills: Map<string, HTMLButtonElement> = new Map();
   private discordToggle!: HTMLInputElement;
+  private discordStatusBadge!: HTMLSpanElement;
+  private discordStatusDot!: HTMLSpanElement;
+  private discordStatusText!: HTMLSpanElement;
+  private discordStatusPollTimer: number | null = null;
   private darkThemeToggle!: HTMLInputElement;
   private adblockToggle!: HTMLInputElement;
   private minimizeToTrayToggle!: HTMLInputElement;
@@ -71,11 +82,22 @@ export class SettingsModal {
     if (!this.isLoadedFromBackend) {
       this.loadBackendSettings().catch(console.error);
     }
+    this.pollDiscordRpcStatus();
+    if (this.discordStatusPollTimer) {
+      window.clearInterval(this.discordStatusPollTimer);
+    }
+    this.discordStatusPollTimer = window.setInterval(() => {
+      this.pollDiscordRpcStatus();
+    }, 2000);
   }
 
   public close(): void {
     if (!this.overlay) return;
     this.overlay.classList.remove('visible');
+    if (this.discordStatusPollTimer) {
+      window.clearInterval(this.discordStatusPollTimer);
+      this.discordStatusPollTimer = null;
+    }
     this.callbacks.onClose();
   }
 
@@ -96,6 +118,9 @@ export class SettingsModal {
     this.darkThemeToggle.checked = this.currentSettings.dark_theme_enabled;
     this.adblockToggle.checked = this.currentSettings.adblock_enabled;
     this.minimizeToTrayToggle.checked = this.currentSettings.minimize_to_tray;
+    if (!this.currentSettings.discord_rpc_enabled) {
+      this.updateDiscordBadgeStatus('disabled');
+    }
   }
 
   private updateActiveProtocolPill(url: string): void {
@@ -289,7 +314,7 @@ export class SettingsModal {
     discordTitle.textContent = 'Discord Rich Presence';
     discordSection.appendChild(discordTitle);
 
-    const discordRow = this.createToggleRow(
+    const discordRow = this.createDiscordToggleRow(
       'Broadcast Playback to Discord',
       'Show your current track title, artist, high-res artwork, and live progress bar in Discord.',
       (chk) => (this.discordToggle = chk)
@@ -347,7 +372,7 @@ export class SettingsModal {
     versionLabel.textContent = 'Desktop Client Version';
     const statusText = document.createElement('span');
     statusText.className = 'sc-updater-status';
-    statusText.textContent = 'App version: v0.1.0';
+    statusText.textContent = 'App version: v0.1.3';
     this.updaterStatusText = statusText;
     updaterInfo.appendChild(versionLabel);
     updaterInfo.appendChild(statusText);
@@ -507,6 +532,140 @@ export class SettingsModal {
     return row;
   }
 
+  private createDiscordToggleRow(
+    label: string,
+    description: string,
+    setRef: (input: HTMLInputElement) => void
+  ): HTMLDivElement {
+    const row = document.createElement('div');
+    row.className = 'sc-setting-row';
+
+    const info = document.createElement('div');
+    info.className = 'sc-setting-info';
+    const labelSpan = document.createElement('span');
+    labelSpan.className = 'sc-setting-label';
+    labelSpan.textContent = label;
+    const descSpan = document.createElement('span');
+    descSpan.className = 'sc-setting-desc';
+    descSpan.textContent = description;
+    info.appendChild(labelSpan);
+    info.appendChild(descSpan);
+
+    const rightContainer = document.createElement('div');
+    rightContainer.style.display = 'flex';
+    rightContainer.style.alignItems = 'center';
+    rightContainer.style.gap = '12px';
+
+    const badge = document.createElement('span');
+    badge.className = 'sc-status-badge';
+    badge.style.display = 'inline-flex';
+    badge.style.alignItems = 'center';
+    badge.style.gap = '6px';
+    badge.style.padding = '3px 9px';
+    badge.style.borderRadius = '999px';
+    badge.style.fontSize = '11px';
+    badge.style.fontWeight = '500';
+    badge.style.transition = 'all 0.2s ease';
+
+    const dot = document.createElement('span');
+    dot.className = 'sc-status-dot';
+    dot.style.width = '6px';
+    dot.style.height = '6px';
+    dot.style.borderRadius = '50%';
+    dot.style.flexShrink = '0';
+
+    const badgeText = document.createElement('span');
+    badgeText.textContent = 'Waiting for Discord desktop app...';
+
+    badge.appendChild(dot);
+    badge.appendChild(badgeText);
+
+    this.discordStatusBadge = badge;
+    this.discordStatusDot = dot;
+    this.discordStatusText = badgeText;
+
+    const switchLabel = document.createElement('label');
+    switchLabel.className = 'sc-switch';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.addEventListener('change', () => {
+      if (!input.checked) {
+        this.updateDiscordBadgeStatus('disabled');
+      } else {
+        this.pollDiscordRpcStatus();
+      }
+    });
+    const slider = document.createElement('span');
+    slider.className = 'sc-switch-slider';
+    switchLabel.appendChild(input);
+    switchLabel.appendChild(slider);
+    setRef(input);
+
+    rightContainer.appendChild(badge);
+    rightContainer.appendChild(switchLabel);
+
+    row.appendChild(info);
+    row.appendChild(rightContainer);
+    return row;
+  }
+
+  private updateDiscordBadgeStatus(status: string): void {
+    if (!this.discordStatusBadge || !this.discordStatusDot || !this.discordStatusText) return;
+
+    if (!this.discordToggle.checked || status === 'disabled') {
+      this.discordStatusText.textContent = 'Disabled';
+      this.discordStatusBadge.style.background = 'rgba(255, 255, 255, 0.04)';
+      this.discordStatusBadge.style.borderColor = 'rgba(255, 255, 255, 0.08)';
+      this.discordStatusBadge.style.color = '#8e8e98';
+      this.discordStatusDot.style.background = '#6b6b78';
+      this.discordStatusDot.style.boxShadow = 'none';
+      return;
+    }
+
+    switch (status) {
+      case 'connected':
+        this.discordStatusText.textContent = 'Connected to Discord';
+        this.discordStatusBadge.style.background = 'rgba(16, 185, 129, 0.12)';
+        this.discordStatusBadge.style.borderColor = 'rgba(16, 185, 129, 0.3)';
+        this.discordStatusBadge.style.color = '#34d399';
+        this.discordStatusDot.style.background = '#10b981';
+        this.discordStatusDot.style.boxShadow = '0 0 6px rgba(16, 185, 129, 0.5)';
+        break;
+      case 'permission_denied':
+        this.discordStatusText.textContent = 'Access denied — Discord is running as Administrator';
+        this.discordStatusBadge.style.background = 'rgba(239, 68, 68, 0.12)';
+        this.discordStatusBadge.style.borderColor = 'rgba(239, 68, 68, 0.3)';
+        this.discordStatusBadge.style.color = '#f87171';
+        this.discordStatusDot.style.background = '#ef4444';
+        this.discordStatusDot.style.boxShadow = '0 0 6px rgba(239, 68, 68, 0.5)';
+        break;
+      case 'waiting_for_discord':
+      default:
+        this.discordStatusText.textContent = 'Waiting for Discord desktop app...';
+        this.discordStatusBadge.style.background = 'rgba(245, 158, 11, 0.12)';
+        this.discordStatusBadge.style.borderColor = 'rgba(245, 158, 11, 0.3)';
+        this.discordStatusBadge.style.color = '#fbbf24';
+        this.discordStatusDot.style.background = '#f59e0b';
+        this.discordStatusDot.style.boxShadow = '0 0 6px rgba(245, 158, 11, 0.5)';
+        break;
+    }
+  }
+
+  private async pollDiscordRpcStatus(): Promise<void> {
+    if (!this.overlay?.classList.contains('visible')) return;
+    if (!this.discordToggle.checked) {
+      this.updateDiscordBadgeStatus('disabled');
+      return;
+    }
+
+    try {
+      const status = await getDiscordRpcStatus();
+      this.updateDiscordBadgeStatus(status);
+    } catch (err) {
+      console.warn('[SC-Desktop] Failed to get Discord RPC status:', err);
+    }
+  }
+
   private async saveCurrentForm(): Promise<AppSettings> {
     const rawUrl = this.proxyUrlInput.value.trim();
     const normalizedUrl = this.normalizeProxyUrl(rawUrl);
@@ -527,6 +686,13 @@ export class SettingsModal {
     const saved = await persistSettings(newSettings);
     this.currentSettings = saved;
     this.callbacks.onSettingsChanged(saved);
+
+    if (!newSettings.discord_rpc_enabled) {
+      this.updateDiscordBadgeStatus('disabled');
+    } else {
+      this.pollDiscordRpcStatus();
+    }
+
     return saved;
   }
 

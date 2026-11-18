@@ -9,6 +9,11 @@ description = "Enables clear_discord_rpc command"
 commands.allow = ["clear_discord_rpc"]
 
 [[permission]]
+identifier = "allow-get-discord-rpc-status"
+description = "Enables get_discord_rpc_status command"
+commands.allow = ["get_discord_rpc_status"]
+
+[[permission]]
 identifier = "allow-get-settings"
 description = "Enables get_settings command"
 commands.allow = ["get_settings"]

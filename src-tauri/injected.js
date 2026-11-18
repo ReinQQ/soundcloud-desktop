@@ -23,7 +23,7 @@
   var styles_default;
   var init_styles = __esm({
     "injected/styles.css"() {
-      styles_default = '/* ==========================================================================\n   SoundCloud Native Desktop Client - Stylesheet\n   Crafted following frontend-design guidelines: intentional typography,\n   tailored palette, restrained micro-interactions & deep dark theme.\n   ========================================================================== */\n\n:root {\n  --sc-brand-orange: #ff5500;\n  --sc-brand-orange-hover: #ff6d24;\n  --sc-brand-orange-active: #e64d00;\n  --sc-brand-orange-dim: rgba(255, 85, 0, 0.15);\n  --sc-brand-orange-border: rgba(255, 85, 0, 0.35);\n\n  --sc-bg-chrome: #0d0d10;\n  --sc-bg-surface: #141418;\n  --sc-bg-surface-elevated: #1a1a20;\n  --sc-bg-surface-hover: #22222a;\n  --sc-bg-input: #111114;\n\n  --sc-border-subtle: rgba(255, 255, 255, 0.07);\n  --sc-border-medium: rgba(255, 255, 255, 0.12);\n  --sc-border-focus: #ff5500;\n\n  --sc-text-primary: #f4f4f6;\n  --sc-text-secondary: #a0a0ab;\n  --sc-text-muted: #6b6b78;\n\n  --sc-titlebar-height: 36px;\n  --sc-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;\n}\n\n/* ==========================================================================\n   Window & Header Layout Corrections\n   ========================================================================== */\n\nbody.sc-desktop-active {\n  padding-top: var(--sc-titlebar-height) !important;\n}\n\n/* Push SoundCloud fixed top navigation header down so nothing clips */\n.header,\n#header,\nheader.header,\n.sc-header {\n  top: var(--sc-titlebar-height) !important;\n  z-index: 1000 !important;\n}\n\n/* ==========================================================================\n   Custom Frameless Titlebar\n   ========================================================================== */\n\n#sc-desktop-titlebar {\n  position: fixed;\n  top: 0;\n  left: 0;\n  right: 0;\n  height: var(--sc-titlebar-height);\n  background: var(--sc-bg-chrome);\n  border-bottom: 1px solid var(--sc-border-subtle);\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 0 0 12px;\n  z-index: 999999;\n  user-select: none;\n  font-family: var(--sc-font-sans);\n  font-size: 12px;\n  color: var(--sc-text-primary);\n  box-sizing: border-box;\n}\n\n/* Non-draggable interactive controls inside titlebar */\n.sc-no-drag {\n  -webkit-app-region: no-drag !important;\n  app-region: no-drag !important;\n  pointer-events: auto !important;\n}\n\n/* Left: Branding */\n.sc-titlebar-left {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  height: 100%;\n}\n\n.sc-brand-icon {\n  width: 18px;\n  height: 18px;\n  fill: var(--sc-brand-orange);\n  display: block;\n}\n\n.sc-brand-title {\n  font-size: 12px;\n  font-weight: 600;\n  letter-spacing: -0.01em;\n  color: var(--sc-text-primary);\n}\n\n.sc-brand-sub {\n  font-size: 10px;\n  font-weight: 500;\n  color: var(--sc-text-muted);\n  text-transform: uppercase;\n  letter-spacing: 0.04em;\n  margin-left: 2px;\n}\n\n/* Center / Status Badges */\n.sc-titlebar-center {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  height: 100%;\n}\n\n.sc-status-badge {\n  display: inline-flex;\n  align-items: center;\n  gap: 6px;\n  padding: 2px 8px;\n  border-radius: 999px;\n  font-size: 11px;\n  font-weight: 500;\n  line-height: 1;\n  background: rgba(255, 255, 255, 0.04);\n  border: 1px solid var(--sc-border-subtle);\n  color: var(--sc-text-muted);\n  transition: all 0.15s ease;\n  user-select: none;\n}\n\n.sc-status-dot {\n  width: 6px;\n  height: 6px;\n  border-radius: 50%;\n  background: var(--sc-text-muted);\n  transition: background-color 0.2s ease, box-shadow 0.2s ease;\n}\n\n/* Proxy badge active */\n.sc-status-badge.proxy-active {\n  background: rgba(16, 185, 129, 0.1);\n  border-color: rgba(16, 185, 129, 0.25);\n  color: #34d399;\n}\n.sc-status-badge.proxy-active .sc-status-dot {\n  background: #10b981;\n  box-shadow: 0 0 6px rgba(16, 185, 129, 0.5);\n}\n\n/* Discord badge active */\n.sc-status-badge.discord-active {\n  background: rgba(88, 101, 242, 0.1);\n  border-color: rgba(88, 101, 242, 0.25);\n  color: #818cf8;\n}\n.sc-status-badge.discord-active .sc-status-dot {\n  background: #5865f2;\n  box-shadow: 0 0 6px rgba(88, 101, 242, 0.5);\n}\n\n/* Audio ad muted badge */\n.sc-status-badge.ad-muted {\n  background: rgba(239, 68, 68, 0.12);\n  border-color: rgba(239, 68, 68, 0.3);\n  color: #f87171;\n}\n.sc-status-badge.ad-muted .sc-status-dot {\n  background: #ef4444;\n  box-shadow: 0 0 6px rgba(239, 68, 68, 0.5);\n}\n\n/* Update Available badge */\n.sc-status-badge.update-available {\n  background: rgba(255, 85, 0, 0.15);\n  border-color: var(--sc-brand-orange-border);\n  color: #ff9d66;\n  cursor: pointer;\n}\n.sc-status-badge.update-available:hover {\n  background: rgba(255, 85, 0, 0.25);\n  color: #ffffff;\n}\n.sc-status-badge.update-available .sc-status-dot {\n  background: var(--sc-brand-orange);\n  box-shadow: 0 0 6px rgba(255, 85, 0, 0.6);\n}\n\n/* Right: Settings and Window Controls */\n.sc-titlebar-right {\n  display: flex;\n  align-items: center;\n  height: 100%;\n}\n\n.sc-titlebar-btn {\n  background: transparent;\n  border: none;\n  outline: none;\n  color: var(--sc-text-secondary);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  cursor: pointer;\n  transition: background-color 0.12s ease, color 0.12s ease;\n  height: 100%;\n  padding: 0 12px;\n  -webkit-app-region: no-drag !important;\n  app-region: no-drag !important;\n  pointer-events: auto !important;\n}\n\n.sc-titlebar-btn:hover {\n  background: rgba(255, 255, 255, 0.08);\n  color: var(--sc-text-primary);\n}\n\n.sc-titlebar-btn.active,\n.sc-titlebar-btn:focus-visible {\n  color: var(--sc-brand-orange);\n}\n\n.sc-titlebar-btn svg {\n  width: 14px;\n  height: 14px;\n  stroke: currentColor;\n  stroke-width: 1.5;\n  stroke-linecap: round;\n  stroke-linejoin: round;\n  fill: none;\n  pointer-events: none;\n}\n\n/* Window Minimize, Maximize, Close */\n.sc-win-btn {\n  width: 44px;\n  height: 100%;\n  padding: 0;\n  -webkit-app-region: no-drag !important;\n  app-region: no-drag !important;\n  pointer-events: auto !important;\n}\n\n.sc-win-close:hover {\n  background: #e81123 !important;\n  color: #ffffff !important;\n}\n\n.sc-win-close:active {\n  background: #bf0f1d !important;\n}\n\n/* ==========================================================================\n   Settings Modal Overlay\n   ========================================================================== */\n\n#sc-settings-overlay {\n  position: fixed;\n  inset: 0;\n  background: rgba(8, 8, 10, 0.65);\n  backdrop-filter: blur(14px);\n  -webkit-backdrop-filter: blur(14px);\n  z-index: 1000000;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  opacity: 0;\n  pointer-events: none;\n  transition: opacity 0.18s cubic-bezier(0.16, 1, 0.3, 1);\n  font-family: var(--sc-font-sans);\n}\n\n#sc-settings-overlay.visible {\n  opacity: 1;\n  pointer-events: auto;\n}\n\n.sc-settings-card {\n  width: 600px;\n  max-width: calc(100vw - 32px);\n  max-height: calc(100vh - 64px);\n  background: var(--sc-bg-surface);\n  border: 1px solid var(--sc-border-medium);\n  border-radius: 12px;\n  display: flex;\n  flex-direction: column;\n  box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.04);\n  transform: scale(0.97) translateY(4px);\n  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  overflow: hidden;\n}\n\n#sc-settings-overlay.visible .sc-settings-card {\n  transform: scale(1) translateY(0);\n}\n\n/* Modal Header */\n.sc-modal-header {\n  padding: 18px 24px 14px 24px;\n  border-bottom: 1px solid var(--sc-border-subtle);\n  display: flex;\n  align-items: flex-start;\n  justify-content: space-between;\n  background: rgba(255, 255, 255, 0.015);\n}\n\n.sc-modal-title-group h2 {\n  margin: 0;\n  font-size: 16px;\n  font-weight: 600;\n  color: var(--sc-text-primary);\n  letter-spacing: -0.01em;\n}\n\n.sc-modal-title-group p {\n  margin: 4px 0 0 0;\n  font-size: 12px;\n  color: var(--sc-text-muted);\n}\n\n.sc-modal-close-btn {\n  background: transparent;\n  border: none;\n  color: var(--sc-text-muted);\n  cursor: pointer;\n  padding: 6px;\n  border-radius: 6px;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  transition: all 0.12s ease;\n}\n\n.sc-modal-close-btn:hover {\n  background: var(--sc-bg-surface-elevated);\n  color: var(--sc-text-primary);\n}\n\n/* Modal Scrollable Body */\n.sc-modal-body {\n  padding: 20px 24px;\n  overflow-y: auto;\n  display: flex;\n  flex-direction: column;\n  gap: 20px;\n}\n\n.sc-settings-section {\n  display: flex;\n  flex-direction: column;\n  gap: 12px;\n}\n\n.sc-section-title {\n  font-size: 11px;\n  font-weight: 600;\n  text-transform: uppercase;\n  letter-spacing: 0.05em;\n  color: var(--sc-text-muted);\n  margin: 0 0 2px 0;\n}\n\n/* Setting item row */\n.sc-setting-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  background: var(--sc-bg-surface-elevated);\n  border: 1px solid var(--sc-border-subtle);\n  border-radius: 8px;\n  padding: 12px 16px;\n  gap: 16px;\n  transition: border-color 0.15s ease;\n}\n\n.sc-setting-row:hover {\n  border-color: var(--sc-border-medium);\n}\n\n.sc-setting-info {\n  display: flex;\n  flex-direction: column;\n  gap: 3px;\n}\n\n.sc-setting-label {\n  font-size: 13px;\n  font-weight: 500;\n  color: var(--sc-text-primary);\n}\n\n.sc-setting-desc {\n  font-size: 11px;\n  color: var(--sc-text-muted);\n  line-height: 1.4;\n}\n\n/* Inputs within settings */\n.sc-input-group {\n  display: flex;\n  flex-direction: column;\n  gap: 8px;\n  background: var(--sc-bg-surface-elevated);\n  border: 1px solid var(--sc-border-subtle);\n  border-radius: 8px;\n  padding: 12px 16px;\n}\n\n.sc-input-label-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n}\n\n.sc-input-label {\n  font-size: 12px;\n  font-weight: 500;\n  color: var(--sc-text-primary);\n}\n\n/* Proxy protocol pill selectors */\n.sc-protocol-pills {\n  display: flex;\n  gap: 4px;\n}\n\n.sc-protocol-pill {\n  font-size: 10px;\n  font-weight: 600;\n  padding: 2px 8px;\n  border-radius: 4px;\n  background: rgba(255, 255, 255, 0.05);\n  border: 1px solid var(--sc-border-subtle);\n  color: var(--sc-text-secondary);\n  cursor: pointer;\n  transition: all 0.12s ease;\n}\n\n.sc-protocol-pill:hover {\n  background: rgba(255, 255, 255, 0.1);\n  color: var(--sc-text-primary);\n}\n\n.sc-protocol-pill.active {\n  background: var(--sc-brand-orange-dim);\n  border-color: var(--sc-brand-orange);\n  color: #ff9d66;\n}\n\n.sc-text-input {\n  background: var(--sc-bg-input);\n  border: 1px solid var(--sc-border-subtle);\n  border-radius: 6px;\n  padding: 8px 12px;\n  font-size: 13px;\n  color: var(--sc-text-primary);\n  font-family: monospace, var(--sc-font-sans);\n  outline: none;\n  transition: border-color 0.15s ease, box-shadow 0.15s ease;\n}\n\n.sc-text-input:focus {\n  border-color: var(--sc-border-focus);\n  box-shadow: 0 0 0 2px var(--sc-brand-orange-dim);\n}\n\n.sc-input-hint {\n  font-size: 11px;\n  color: var(--sc-text-muted);\n}\n\n/* Switch Toggle Component */\n.sc-switch {\n  position: relative;\n  display: inline-block;\n  width: 40px;\n  height: 22px;\n  flex-shrink: 0;\n}\n\n.sc-switch input {\n  opacity: 0;\n  width: 0;\n  height: 0;\n}\n\n.sc-switch-slider {\n  position: absolute;\n  cursor: pointer;\n  inset: 0;\n  background-color: #27272e;\n  border-radius: 22px;\n  transition: background-color 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  border: 1px solid var(--sc-border-subtle);\n}\n\n.sc-switch-slider::before {\n  position: absolute;\n  content: "";\n  height: 16px;\n  width: 16px;\n  left: 2px;\n  bottom: 2px;\n  background-color: #d1d1d8;\n  border-radius: 50%;\n  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.2s ease;\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);\n}\n\n.sc-switch input:checked + .sc-switch-slider {\n  background-color: var(--sc-brand-orange);\n  border-color: var(--sc-brand-orange-hover);\n}\n\n.sc-switch input:checked + .sc-switch-slider::before {\n  transform: translateX(18px);\n  background-color: #ffffff;\n}\n\n/* Notice box for proxy restart requirement */\n.sc-notice-banner {\n  background: rgba(255, 85, 0, 0.08);\n  border: 1px solid var(--sc-brand-orange-border);\n  border-radius: 8px;\n  padding: 10px 14px;\n  font-size: 11px;\n  color: #ff9d66;\n  line-height: 1.4;\n  display: flex;\n  align-items: center;\n  gap: 8px;\n}\n\n/* Updater UI Row in Settings */\n.sc-updater-row {\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  background: var(--sc-bg-surface-elevated);\n  border: 1px solid var(--sc-border-subtle);\n  border-radius: 8px;\n  padding: 12px 16px;\n  gap: 16px;\n}\n\n.sc-updater-status {\n  font-size: 11px;\n  color: var(--sc-text-muted);\n}\n\n.sc-updater-status.highlight {\n  color: #34d399;\n}\n\n/* Modal Footer */\n.sc-modal-footer {\n  padding: 14px 24px;\n  border-top: 1px solid var(--sc-border-subtle);\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  background: rgba(255, 255, 255, 0.015);\n}\n\n.sc-footer-actions {\n  display: flex;\n  align-items: center;\n  gap: 10px;\n}\n\n.sc-btn {\n  padding: 8px 16px;\n  border-radius: 6px;\n  font-size: 13px;\n  font-weight: 500;\n  cursor: pointer;\n  border: none;\n  outline: none;\n  transition: all 0.15s ease;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 6px;\n}\n\n.sc-btn-sm {\n  padding: 4px 10px;\n  font-size: 11px;\n  border-radius: 4px;\n}\n\n.sc-btn-secondary {\n  background: var(--sc-bg-surface-elevated);\n  border: 1px solid var(--sc-border-medium);\n  color: var(--sc-text-secondary);\n}\n\n.sc-btn-secondary:hover {\n  background: var(--sc-bg-surface-hover);\n  color: var(--sc-text-primary);\n}\n\n.sc-btn-primary {\n  background: var(--sc-brand-orange);\n  color: #ffffff;\n  font-weight: 600;\n  box-shadow: 0 2px 8px rgba(255, 85, 0, 0.35);\n}\n\n.sc-btn-primary:hover {\n  background: var(--sc-brand-orange-hover);\n  box-shadow: 0 4px 12px rgba(255, 85, 0, 0.45);\n}\n\n.sc-btn-primary:active {\n  background: var(--sc-brand-orange-active);\n  transform: translateY(1px);\n}\n\n.sc-btn-restart {\n  background: transparent;\n  border: 1px solid var(--sc-brand-orange-border);\n  color: #ff7f36;\n}\n\n.sc-btn-restart:hover {\n  background: var(--sc-brand-orange-dim);\n  color: #ff9d66;\n}\n\n/* Toast feedback inside modal */\n.sc-toast {\n  position: absolute;\n  bottom: 20px;\n  left: 50%;\n  transform: translateX(-50%) translateY(20px);\n  background: #1e1e24;\n  border: 1px solid var(--sc-border-medium);\n  color: var(--sc-text-primary);\n  padding: 8px 16px;\n  border-radius: 20px;\n  font-size: 12px;\n  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.5);\n  opacity: 0;\n  pointer-events: none;\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\n  z-index: 1000001;\n}\n\n.sc-toast.visible {\n  opacity: 1;\n  transform: translateX(-50%) translateY(0);\n}\n\n/* ==========================================================================\n   SoundCloud AdBlocker Styling\n   ========================================================================== */\n\nbody.sc-adblock-enabled .soundBadge__promoted,\nbody.sc-adblock-enabled .soundBadge__ad,\nbody.sc-adblock-enabled .promotedSoundsModule,\nbody.sc-adblock-enabled .sidebarModule__ad,\nbody.sc-adblock-enabled .playControls__banner,\nbody.sc-adblock-enabled .header__upsell,\nbody.sc-adblock-enabled .modal__upsell,\nbody.sc-adblock-enabled .upsellBanner,\nbody.sc-adblock-enabled .trackUpsell,\nbody.sc-adblock-enabled .m-upsell,\nbody.sc-adblock-enabled .mobileAppsBanner,\nbody.sc-adblock-enabled .announcementBanner,\nbody.sc-adblock-enabled .streamSidebar__promoted,\nbody.sc-adblock-enabled div[data-testid="ad-item"],\nbody.sc-adblock-enabled div[data-testid="sidebar-ad"],\nbody.sc-adblock-enabled .nativeAudioAd {\n  display: none !important;\n  visibility: hidden !important;\n  height: 0 !important;\n  min-height: 0 !important;\n  padding: 0 !important;\n  margin: 0 !important;\n  opacity: 0 !important;\n  pointer-events: none !important;\n}\n\n/* ==========================================================================\n   SoundCloud Deep Dark Theme\n   High-contrast charcoal & midnight surfaces, preserving artwork and waveforms.\n   ========================================================================== */\n\nhtml.sc-dark-theme,\nbody.sc-dark-theme {\n  background-color: #0f0f11 !important;\n  color: #e4e4e7 !important;\n}\n\n/* Main background containers */\nbody.sc-dark-theme #content,\nbody.sc-dark-theme .l-container,\nbody.sc-dark-theme .l-listen-hero,\nbody.sc-dark-theme .listenDetails,\nbody.sc-dark-theme .l-fluid-content,\nbody.sc-dark-theme .sc-selection-content {\n  background-color: #0f0f11 !important;\n}\n\n/* Top SoundCloud header */\nbody.sc-dark-theme .header,\nbody.sc-dark-theme #header {\n  background: #141416 !important;\n  border-bottom: 1px solid #222226 !important;\n}\n\nbody.sc-dark-theme .header__navMenu a,\nbody.sc-dark-theme .header__link {\n  color: #a1a1aa !important;\n}\n\nbody.sc-dark-theme .header__navMenu a.selected,\nbody.sc-dark-theme .header__navMenu a:hover {\n  color: #ffffff !important;\n}\n\nbody.sc-dark-theme .headerSearch__input {\n  background: #1a1a1e !important;\n  border: 1px solid #2a2a30 !important;\n  color: #f4f4f5 !important;\n}\n\n/* Player bar at bottom */\nbody.sc-dark-theme .playControls,\nbody.sc-dark-theme .playControls__wrapper,\nbody.sc-dark-theme .playControls__bg {\n  background: #141417 !important;\n  border-top: 1px solid #242429 !important;\n}\n\nbody.sc-dark-theme .playbackSoundBadge__titleLink {\n  color: #f4f4f5 !important;\n}\n\nbody.sc-dark-theme .playbackSoundBadge__lightLink {\n  color: #a1a1aa !important;\n}\n\nbody.sc-dark-theme .playbackTimeline__timePassed,\nbody.sc-dark-theme .playbackTimeline__duration {\n  color: #71717a !important;\n}\n\n/* Track cards, rows, badges */\nbody.sc-dark-theme .sound__body,\nbody.sc-dark-theme .trackItem,\nbody.sc-dark-theme .trackList__item {\n  background-color: transparent !important;\n}\n\nbody.sc-dark-theme .soundList__item {\n  border-bottom: 1px solid #1c1c20 !important;\n}\n\nbody.sc-dark-theme .trackItem:hover,\nbody.sc-dark-theme .trackItem.active {\n  background-color: #18181c !important;\n}\n\nbody.sc-dark-theme .sidebarModule {\n  background-color: #141417 !important;\n  border: 1px solid #222226 !important;\n  border-radius: 8px !important;\n  padding: 14px !important;\n}\n\nbody.sc-dark-theme .sidebarModule .sidebarHeader {\n  border-bottom: 1px solid #222226 !important;\n}\n\n/* Comments, user rows, inputs */\nbody.sc-dark-theme .commentForm__wrapper,\nbody.sc-dark-theme .commentForm__input {\n  background-color: #18181c !important;\n  border-color: #27272a !important;\n  color: #f4f4f5 !important;\n}\n\n/* Buttons in dark theme */\nbody.sc-dark-theme .sc-button-medium,\nbody.sc-dark-theme .sc-button-small {\n  background-color: #1a1a1f !important;\n  border-color: #2a2a30 !important;\n  color: #e4e4e7 !important;\n}\n\nbody.sc-dark-theme .sc-button-medium:hover,\nbody.sc-dark-theme .sc-button-small:hover {\n  background-color: #24242a !important;\n  color: #ffffff !important;\n}\n\n/* Waveform Canvas & Artwork: MUST PRESERVE VISIBILITY & ORIGINAL COLORS */\nbody.sc-dark-theme .waveformCommentsNode,\nbody.sc-dark-theme .waveformCommentsNode canvas {\n  filter: none !important;\n  opacity: 0.95;\n}\n\nbody.sc-dark-theme .sc-artwork,\nbody.sc-dark-theme .image__light,\nbody.sc-dark-theme .visualSound__wrapper,\nbody.sc-dark-theme img {\n  filter: none !important;\n}\n\n/* Active states for Shuffle, Repeat and Like buttons in Deep Dark Theme */\nbody.sc-dark-theme .playControls .shuffleControl.m-shuffling,\nbody.sc-dark-theme .playControls .shuffleControl[aria-checked="true"],\nbody.sc-dark-theme .playControls .repeatControl.m-one,\nbody.sc-dark-theme .playControls .repeatControl.m-all,\nbody.sc-dark-theme .playbackSoundBadge__like.sc-button-selected,\nbody.sc-dark-theme .playbackSoundBadge__like[aria-pressed="true"],\nbody.sc-dark-theme .sc-button-like.sc-button-selected,\nbody.sc-dark-theme .sc-button-like[aria-pressed="true"] {\n  color: #ff5500 !important;\n  border-color: rgba(255, 85, 0, 0.45) !important;\n  background-color: rgba(255, 85, 0, 0.14) !important;\n}\n\nbody.sc-dark-theme .playControls .shuffleControl.m-shuffling svg,\nbody.sc-dark-theme .playControls .shuffleControl[aria-checked="true"] svg,\nbody.sc-dark-theme .playControls .repeatControl.m-one svg,\nbody.sc-dark-theme .playControls .repeatControl.m-all svg,\nbody.sc-dark-theme .playbackSoundBadge__like.sc-button-selected svg,\nbody.sc-dark-theme .playbackSoundBadge__like[aria-pressed="true"] svg,\nbody.sc-dark-theme .sc-button-like.sc-button-selected svg,\nbody.sc-dark-theme .sc-button-like[aria-pressed="true"] svg {\n  fill: #ff5500 !important;\n  color: #ff5500 !important;\n}\r\n';
+      styles_default = '/* ==========================================================================\r\n   SoundCloud Native Desktop Client - Stylesheet\r\n   Crafted following frontend-design guidelines: intentional typography,\r\n   tailored palette, restrained micro-interactions & deep dark theme.\r\n   ========================================================================== */\r\n\r\n:root {\r\n  --sc-brand-orange: #ff5500;\r\n  --sc-brand-orange-hover: #ff6d24;\r\n  --sc-brand-orange-active: #e64d00;\r\n  --sc-brand-orange-dim: rgba(255, 85, 0, 0.15);\r\n  --sc-brand-orange-border: rgba(255, 85, 0, 0.35);\r\n\r\n  --sc-bg-chrome: #0d0d10;\r\n  --sc-bg-surface: #141418;\r\n  --sc-bg-surface-elevated: #1a1a20;\r\n  --sc-bg-surface-hover: #22222a;\r\n  --sc-bg-input: #111114;\r\n\r\n  --sc-border-subtle: rgba(255, 255, 255, 0.07);\r\n  --sc-border-medium: rgba(255, 255, 255, 0.12);\r\n  --sc-border-focus: #ff5500;\r\n\r\n  --sc-text-primary: #f4f4f6;\r\n  --sc-text-secondary: #a0a0ab;\r\n  --sc-text-muted: #6b6b78;\r\n\r\n  --sc-titlebar-height: 36px;\r\n  --sc-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;\r\n}\r\n\r\n/* ==========================================================================\r\n   Window & Header Layout Corrections\r\n   ========================================================================== */\r\n\r\nbody.sc-desktop-active {\r\n  padding-top: var(--sc-titlebar-height) !important;\r\n}\r\n\r\n/* Push SoundCloud fixed top navigation header down so nothing clips */\r\n.header,\r\n#header,\r\nheader.header,\r\n.sc-header {\r\n  top: var(--sc-titlebar-height) !important;\r\n  z-index: 1000 !important;\r\n}\r\n\r\n/* ==========================================================================\r\n   Custom Frameless Titlebar\r\n   ========================================================================== */\r\n\r\n#sc-desktop-titlebar {\r\n  position: fixed;\r\n  top: 0;\r\n  left: 0;\r\n  right: 0;\r\n  height: var(--sc-titlebar-height);\r\n  background: var(--sc-bg-chrome);\r\n  border-bottom: 1px solid var(--sc-border-subtle);\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  padding: 0 0 0 12px;\r\n  z-index: 999999;\r\n  user-select: none;\r\n  font-family: var(--sc-font-sans);\r\n  font-size: 12px;\r\n  color: var(--sc-text-primary);\r\n  box-sizing: border-box;\r\n}\r\n\r\n/* Non-draggable interactive controls inside titlebar */\r\n.sc-no-drag {\r\n  -webkit-app-region: no-drag !important;\r\n  app-region: no-drag !important;\r\n  pointer-events: auto !important;\r\n}\r\n\r\n/* Left: Branding */\r\n.sc-titlebar-left {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  height: 100%;\r\n}\r\n\r\n.sc-brand-icon {\r\n  width: 18px;\r\n  height: 18px;\r\n  fill: var(--sc-brand-orange);\r\n  display: block;\r\n}\r\n\r\n.sc-brand-title {\r\n  font-size: 12px;\r\n  font-weight: 600;\r\n  letter-spacing: -0.01em;\r\n  color: var(--sc-text-primary);\r\n}\r\n\r\n.sc-brand-sub {\r\n  font-size: 10px;\r\n  font-weight: 500;\r\n  color: var(--sc-text-muted);\r\n  text-transform: uppercase;\r\n  letter-spacing: 0.04em;\r\n  margin-left: 2px;\r\n}\r\n\r\n/* Center / Status Badges */\r\n.sc-titlebar-center {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  height: 100%;\r\n}\r\n\r\n.sc-status-badge {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: 6px;\r\n  padding: 2px 8px;\r\n  border-radius: 999px;\r\n  font-size: 11px;\r\n  font-weight: 500;\r\n  line-height: 1;\r\n  background: rgba(255, 255, 255, 0.04);\r\n  border: 1px solid var(--sc-border-subtle);\r\n  color: var(--sc-text-muted);\r\n  transition: all 0.15s ease;\r\n  user-select: none;\r\n}\r\n\r\n.sc-status-dot {\r\n  width: 6px;\r\n  height: 6px;\r\n  border-radius: 50%;\r\n  background: var(--sc-text-muted);\r\n  transition: background-color 0.2s ease, box-shadow 0.2s ease;\r\n}\r\n\r\n/* Proxy badge active */\r\n.sc-status-badge.proxy-active {\r\n  background: rgba(16, 185, 129, 0.1);\r\n  border-color: rgba(16, 185, 129, 0.25);\r\n  color: #34d399;\r\n}\r\n.sc-status-badge.proxy-active .sc-status-dot {\r\n  background: #10b981;\r\n  box-shadow: 0 0 6px rgba(16, 185, 129, 0.5);\r\n}\r\n\r\n/* Discord badge active */\r\n.sc-status-badge.discord-active {\r\n  background: rgba(88, 101, 242, 0.1);\r\n  border-color: rgba(88, 101, 242, 0.25);\r\n  color: #818cf8;\r\n}\r\n.sc-status-badge.discord-active .sc-status-dot {\r\n  background: #5865f2;\r\n  box-shadow: 0 0 6px rgba(88, 101, 242, 0.5);\r\n}\r\n\r\n/* Audio ad muted badge */\r\n.sc-status-badge.ad-muted {\r\n  background: rgba(239, 68, 68, 0.12);\r\n  border-color: rgba(239, 68, 68, 0.3);\r\n  color: #f87171;\r\n}\r\n.sc-status-badge.ad-muted .sc-status-dot {\r\n  background: #ef4444;\r\n  box-shadow: 0 0 6px rgba(239, 68, 68, 0.5);\r\n}\r\n\r\n/* Update Available badge */\r\n.sc-status-badge.update-available {\r\n  background: rgba(255, 85, 0, 0.15);\r\n  border-color: var(--sc-brand-orange-border);\r\n  color: #ff9d66;\r\n  cursor: pointer;\r\n}\r\n.sc-status-badge.update-available:hover {\r\n  background: rgba(255, 85, 0, 0.25);\r\n  color: #ffffff;\r\n}\r\n.sc-status-badge.update-available .sc-status-dot {\r\n  background: var(--sc-brand-orange);\r\n  box-shadow: 0 0 6px rgba(255, 85, 0, 0.6);\r\n}\r\n\r\n/* Right: Settings and Window Controls */\r\n.sc-titlebar-right {\r\n  display: flex;\r\n  align-items: center;\r\n  height: 100%;\r\n}\r\n\r\n.sc-titlebar-btn {\r\n  background: transparent;\r\n  border: none;\r\n  outline: none;\r\n  color: var(--sc-text-secondary);\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  cursor: pointer;\r\n  transition: background-color 0.12s ease, color 0.12s ease;\r\n  height: 100%;\r\n  padding: 0 12px;\r\n  -webkit-app-region: no-drag !important;\r\n  app-region: no-drag !important;\r\n  pointer-events: auto !important;\r\n}\r\n\r\n.sc-titlebar-btn:hover {\r\n  background: rgba(255, 255, 255, 0.08);\r\n  color: var(--sc-text-primary);\r\n}\r\n\r\n.sc-titlebar-btn.active,\r\n.sc-titlebar-btn:focus-visible {\r\n  color: var(--sc-brand-orange);\r\n}\r\n\r\n.sc-titlebar-btn svg {\r\n  width: 14px;\r\n  height: 14px;\r\n  stroke: currentColor;\r\n  stroke-width: 1.5;\r\n  stroke-linecap: round;\r\n  stroke-linejoin: round;\r\n  fill: none;\r\n  pointer-events: none;\r\n}\r\n\r\n/* Window Minimize, Maximize, Close */\r\n.sc-win-btn {\r\n  width: 44px;\r\n  height: 100%;\r\n  padding: 0;\r\n  -webkit-app-region: no-drag !important;\r\n  app-region: no-drag !important;\r\n  pointer-events: auto !important;\r\n}\r\n\r\n.sc-win-close:hover {\r\n  background: #e81123 !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n.sc-win-close:active {\r\n  background: #bf0f1d !important;\r\n}\r\n\r\n/* ==========================================================================\r\n   Settings Modal Overlay\r\n   ========================================================================== */\r\n\r\n#sc-settings-overlay {\r\n  position: fixed;\r\n  inset: 0;\r\n  background: rgba(8, 8, 10, 0.65);\r\n  backdrop-filter: blur(14px);\r\n  -webkit-backdrop-filter: blur(14px);\r\n  z-index: 1000000;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  opacity: 0;\r\n  pointer-events: none;\r\n  transition: opacity 0.18s cubic-bezier(0.16, 1, 0.3, 1);\r\n  font-family: var(--sc-font-sans);\r\n}\r\n\r\n#sc-settings-overlay.visible {\r\n  opacity: 1;\r\n  pointer-events: auto;\r\n}\r\n\r\n.sc-settings-card {\r\n  width: 600px;\r\n  max-width: calc(100vw - 32px);\r\n  max-height: calc(100vh - 64px);\r\n  background: var(--sc-bg-surface);\r\n  border: 1px solid var(--sc-border-medium);\r\n  border-radius: 12px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  box-shadow: 0 24px 48px -12px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.04);\r\n  transform: scale(0.97) translateY(4px);\r\n  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);\r\n  overflow: hidden;\r\n}\r\n\r\n#sc-settings-overlay.visible .sc-settings-card {\r\n  transform: scale(1) translateY(0);\r\n}\r\n\r\n/* Modal Header */\r\n.sc-modal-header {\r\n  padding: 18px 24px 14px 24px;\r\n  border-bottom: 1px solid var(--sc-border-subtle);\r\n  display: flex;\r\n  align-items: flex-start;\r\n  justify-content: space-between;\r\n  background: rgba(255, 255, 255, 0.015);\r\n}\r\n\r\n.sc-modal-title-group h2 {\r\n  margin: 0;\r\n  font-size: 16px;\r\n  font-weight: 600;\r\n  color: var(--sc-text-primary);\r\n  letter-spacing: -0.01em;\r\n}\r\n\r\n.sc-modal-title-group p {\r\n  margin: 4px 0 0 0;\r\n  font-size: 12px;\r\n  color: var(--sc-text-muted);\r\n}\r\n\r\n.sc-modal-close-btn {\r\n  background: transparent;\r\n  border: none;\r\n  color: var(--sc-text-muted);\r\n  cursor: pointer;\r\n  padding: 6px;\r\n  border-radius: 6px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  transition: all 0.12s ease;\r\n}\r\n\r\n.sc-modal-close-btn:hover {\r\n  background: var(--sc-bg-surface-elevated);\r\n  color: var(--sc-text-primary);\r\n}\r\n\r\n/* Modal Scrollable Body */\r\n.sc-modal-body {\r\n  padding: 20px 24px;\r\n  overflow-y: auto;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 20px;\r\n}\r\n\r\n.sc-settings-section {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n}\r\n\r\n.sc-section-title {\r\n  font-size: 11px;\r\n  font-weight: 600;\r\n  text-transform: uppercase;\r\n  letter-spacing: 0.05em;\r\n  color: var(--sc-text-muted);\r\n  margin: 0 0 2px 0;\r\n}\r\n\r\n/* Setting item row */\r\n.sc-setting-row {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  background: var(--sc-bg-surface-elevated);\r\n  border: 1px solid var(--sc-border-subtle);\r\n  border-radius: 8px;\r\n  padding: 12px 16px;\r\n  gap: 16px;\r\n  transition: border-color 0.15s ease;\r\n}\r\n\r\n.sc-setting-row:hover {\r\n  border-color: var(--sc-border-medium);\r\n}\r\n\r\n.sc-setting-info {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 3px;\r\n}\r\n\r\n.sc-setting-label {\r\n  font-size: 13px;\r\n  font-weight: 500;\r\n  color: var(--sc-text-primary);\r\n}\r\n\r\n.sc-setting-desc {\r\n  font-size: 11px;\r\n  color: var(--sc-text-muted);\r\n  line-height: 1.4;\r\n}\r\n\r\n/* Inputs within settings */\r\n.sc-input-group {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  background: var(--sc-bg-surface-elevated);\r\n  border: 1px solid var(--sc-border-subtle);\r\n  border-radius: 8px;\r\n  padding: 12px 16px;\r\n}\r\n\r\n.sc-input-label-row {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n}\r\n\r\n.sc-input-label {\r\n  font-size: 12px;\r\n  font-weight: 500;\r\n  color: var(--sc-text-primary);\r\n}\r\n\r\n/* Proxy protocol pill selectors */\r\n.sc-protocol-pills {\r\n  display: flex;\r\n  gap: 4px;\r\n}\r\n\r\n.sc-protocol-pill {\r\n  font-size: 10px;\r\n  font-weight: 600;\r\n  padding: 2px 8px;\r\n  border-radius: 4px;\r\n  background: rgba(255, 255, 255, 0.05);\r\n  border: 1px solid var(--sc-border-subtle);\r\n  color: var(--sc-text-secondary);\r\n  cursor: pointer;\r\n  transition: all 0.12s ease;\r\n}\r\n\r\n.sc-protocol-pill:hover {\r\n  background: rgba(255, 255, 255, 0.1);\r\n  color: var(--sc-text-primary);\r\n}\r\n\r\n.sc-protocol-pill.active {\r\n  background: var(--sc-brand-orange-dim);\r\n  border-color: var(--sc-brand-orange);\r\n  color: #ff9d66;\r\n}\r\n\r\n.sc-text-input {\r\n  background: var(--sc-bg-input);\r\n  border: 1px solid var(--sc-border-subtle);\r\n  border-radius: 6px;\r\n  padding: 8px 12px;\r\n  font-size: 13px;\r\n  color: var(--sc-text-primary);\r\n  font-family: monospace, var(--sc-font-sans);\r\n  outline: none;\r\n  transition: border-color 0.15s ease, box-shadow 0.15s ease;\r\n}\r\n\r\n.sc-text-input:focus {\r\n  border-color: var(--sc-border-focus);\r\n  box-shadow: 0 0 0 2px var(--sc-brand-orange-dim);\r\n}\r\n\r\n.sc-input-hint {\r\n  font-size: 11px;\r\n  color: var(--sc-text-muted);\r\n}\r\n\r\n/* Switch Toggle Component */\r\n.sc-switch {\r\n  position: relative;\r\n  display: inline-block;\r\n  width: 40px;\r\n  height: 22px;\r\n  flex-shrink: 0;\r\n}\r\n\r\n.sc-switch input {\r\n  opacity: 0;\r\n  width: 0;\r\n  height: 0;\r\n}\r\n\r\n.sc-switch-slider {\r\n  position: absolute;\r\n  cursor: pointer;\r\n  inset: 0;\r\n  background-color: #27272e;\r\n  border-radius: 22px;\r\n  transition: background-color 0.2s cubic-bezier(0.16, 1, 0.3, 1);\r\n  border: 1px solid var(--sc-border-subtle);\r\n}\r\n\r\n.sc-switch-slider::before {\r\n  position: absolute;\r\n  content: "";\r\n  height: 16px;\r\n  width: 16px;\r\n  left: 2px;\r\n  bottom: 2px;\r\n  background-color: #d1d1d8;\r\n  border-radius: 50%;\r\n  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.2s ease;\r\n  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);\r\n}\r\n\r\n.sc-switch input:checked + .sc-switch-slider {\r\n  background-color: var(--sc-brand-orange);\r\n  border-color: var(--sc-brand-orange-hover);\r\n}\r\n\r\n.sc-switch input:checked + .sc-switch-slider::before {\r\n  transform: translateX(18px);\r\n  background-color: #ffffff;\r\n}\r\n\r\n/* Notice box for proxy restart requirement */\r\n.sc-notice-banner {\r\n  background: rgba(255, 85, 0, 0.08);\r\n  border: 1px solid var(--sc-brand-orange-border);\r\n  border-radius: 8px;\r\n  padding: 10px 14px;\r\n  font-size: 11px;\r\n  color: #ff9d66;\r\n  line-height: 1.4;\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n}\r\n\r\n/* Updater UI Row in Settings */\r\n.sc-updater-row {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  background: var(--sc-bg-surface-elevated);\r\n  border: 1px solid var(--sc-border-subtle);\r\n  border-radius: 8px;\r\n  padding: 12px 16px;\r\n  gap: 16px;\r\n}\r\n\r\n.sc-updater-status {\r\n  font-size: 11px;\r\n  color: var(--sc-text-muted);\r\n}\r\n\r\n.sc-updater-status.highlight {\r\n  color: #34d399;\r\n}\r\n\r\n/* Modal Footer */\r\n.sc-modal-footer {\r\n  padding: 14px 24px;\r\n  border-top: 1px solid var(--sc-border-subtle);\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  background: rgba(255, 255, 255, 0.015);\r\n}\r\n\r\n.sc-footer-actions {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 10px;\r\n}\r\n\r\n.sc-btn {\r\n  padding: 8px 16px;\r\n  border-radius: 6px;\r\n  font-size: 13px;\r\n  font-weight: 500;\r\n  cursor: pointer;\r\n  border: none;\r\n  outline: none;\r\n  transition: all 0.15s ease;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: 6px;\r\n}\r\n\r\n.sc-btn-sm {\r\n  padding: 4px 10px;\r\n  font-size: 11px;\r\n  border-radius: 4px;\r\n}\r\n\r\n.sc-btn-secondary {\r\n  background: var(--sc-bg-surface-elevated);\r\n  border: 1px solid var(--sc-border-medium);\r\n  color: var(--sc-text-secondary);\r\n}\r\n\r\n.sc-btn-secondary:hover {\r\n  background: var(--sc-bg-surface-hover);\r\n  color: var(--sc-text-primary);\r\n}\r\n\r\n.sc-btn-primary {\r\n  background: var(--sc-brand-orange);\r\n  color: #ffffff;\r\n  font-weight: 600;\r\n  box-shadow: 0 2px 8px rgba(255, 85, 0, 0.35);\r\n}\r\n\r\n.sc-btn-primary:hover {\r\n  background: var(--sc-brand-orange-hover);\r\n  box-shadow: 0 4px 12px rgba(255, 85, 0, 0.45);\r\n}\r\n\r\n.sc-btn-primary:active {\r\n  background: var(--sc-brand-orange-active);\r\n  transform: translateY(1px);\r\n}\r\n\r\n.sc-btn-restart {\r\n  background: transparent;\r\n  border: 1px solid var(--sc-brand-orange-border);\r\n  color: #ff7f36;\r\n}\r\n\r\n.sc-btn-restart:hover {\r\n  background: var(--sc-brand-orange-dim);\r\n  color: #ff9d66;\r\n}\r\n\r\n/* Toast feedback inside modal */\r\n.sc-toast {\r\n  position: absolute;\r\n  bottom: 20px;\r\n  left: 50%;\r\n  transform: translateX(-50%) translateY(20px);\r\n  background: #1e1e24;\r\n  border: 1px solid var(--sc-border-medium);\r\n  color: var(--sc-text-primary);\r\n  padding: 8px 16px;\r\n  border-radius: 20px;\r\n  font-size: 12px;\r\n  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.5);\r\n  opacity: 0;\r\n  pointer-events: none;\r\n  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);\r\n  z-index: 1000001;\r\n}\r\n\r\n.sc-toast.visible {\r\n  opacity: 1;\r\n  transform: translateX(-50%) translateY(0);\r\n}\r\n\r\n/* ==========================================================================\r\n   SoundCloud AdBlocker Styling\r\n   ========================================================================== */\r\n\r\nbody.sc-adblock-enabled .soundBadge__promoted,\r\nbody.sc-adblock-enabled .soundBadge__ad,\r\nbody.sc-adblock-enabled .promotedSoundsModule,\r\nbody.sc-adblock-enabled .sidebarModule__ad,\r\nbody.sc-adblock-enabled .playControls__banner,\r\nbody.sc-adblock-enabled .header__upsell,\r\nbody.sc-adblock-enabled .modal__upsell,\r\nbody.sc-adblock-enabled .upsellBanner,\r\nbody.sc-adblock-enabled .trackUpsell,\r\nbody.sc-adblock-enabled .m-upsell,\r\nbody.sc-adblock-enabled .mobileAppsBanner,\r\nbody.sc-adblock-enabled .announcementBanner,\r\nbody.sc-adblock-enabled .streamSidebar__promoted,\r\nbody.sc-adblock-enabled div[data-testid="ad-item"],\r\nbody.sc-adblock-enabled div[data-testid="sidebar-ad"],\r\nbody.sc-adblock-enabled .nativeAudioAd {\r\n  display: none !important;\r\n  visibility: hidden !important;\r\n  height: 0 !important;\r\n  min-height: 0 !important;\r\n  padding: 0 !important;\r\n  margin: 0 !important;\r\n  opacity: 0 !important;\r\n  pointer-events: none !important;\r\n}\r\n\r\n/* ==========================================================================\r\n   SoundCloud Deep Dark Theme\r\n   High-contrast charcoal & midnight surfaces, preserving artwork and waveforms.\r\n   ========================================================================== */\r\n\r\nhtml.sc-dark-theme,\r\nbody.sc-dark-theme {\r\n  background-color: #0f0f11 !important;\r\n  color: #e4e4e7 !important;\r\n}\r\n\r\n/* Main background containers */\r\nbody.sc-dark-theme #content,\r\nbody.sc-dark-theme .l-container,\r\nbody.sc-dark-theme .l-listen-hero,\r\nbody.sc-dark-theme .listenDetails,\r\nbody.sc-dark-theme .l-fluid-content,\r\nbody.sc-dark-theme .sc-selection-content {\r\n  background-color: #0f0f11 !important;\r\n}\r\n\r\n/* Top SoundCloud header */\r\nbody.sc-dark-theme .header,\r\nbody.sc-dark-theme #header {\r\n  background: #141416 !important;\r\n  border-bottom: 1px solid #222226 !important;\r\n}\r\n\r\nbody.sc-dark-theme .header__navMenu a,\r\nbody.sc-dark-theme .header__link {\r\n  color: #a1a1aa !important;\r\n}\r\n\r\nbody.sc-dark-theme .header__navMenu a.selected,\r\nbody.sc-dark-theme .header__navMenu a:hover {\r\n  color: #ffffff !important;\r\n}\r\n\r\nbody.sc-dark-theme .headerSearch__input {\r\n  background: #1a1a1e !important;\r\n  border: 1px solid #2a2a30 !important;\r\n  color: #f4f4f5 !important;\r\n}\r\n\r\n/* Player bar at bottom */\r\nbody.sc-dark-theme .playControls,\r\nbody.sc-dark-theme .playControls__wrapper,\r\nbody.sc-dark-theme .playControls__bg {\r\n  background: #141417 !important;\r\n  border-top: 1px solid #242429 !important;\r\n}\r\n\r\nbody.sc-dark-theme .playbackSoundBadge__titleLink {\r\n  color: #f4f4f5 !important;\r\n}\r\n\r\nbody.sc-dark-theme .playbackSoundBadge__lightLink {\r\n  color: #a1a1aa !important;\r\n}\r\n\r\nbody.sc-dark-theme .playbackTimeline__timePassed,\r\nbody.sc-dark-theme .playbackTimeline__duration {\r\n  color: #71717a !important;\r\n}\r\n\r\n/* Track cards, rows, badges */\r\nbody.sc-dark-theme .sound__body,\r\nbody.sc-dark-theme .trackItem,\r\nbody.sc-dark-theme .trackList__item {\r\n  background-color: transparent !important;\r\n}\r\n\r\nbody.sc-dark-theme .soundList__item {\r\n  border-bottom: 1px solid #1c1c20 !important;\r\n}\r\n\r\nbody.sc-dark-theme .trackItem:hover,\r\nbody.sc-dark-theme .trackItem.active {\r\n  background-color: #18181c !important;\r\n}\r\n\r\nbody.sc-dark-theme .sidebarModule {\r\n  background-color: #141417 !important;\r\n  border: 1px solid #222226 !important;\r\n  border-radius: 8px !important;\r\n  padding: 14px !important;\r\n}\r\n\r\nbody.sc-dark-theme .sidebarModule .sidebarHeader {\r\n  border-bottom: 1px solid #222226 !important;\r\n}\r\n\r\n/* Comments, user rows, inputs */\r\nbody.sc-dark-theme .commentForm__wrapper,\r\nbody.sc-dark-theme .commentForm__input {\r\n  background-color: #18181c !important;\r\n  border-color: #27272a !important;\r\n  color: #f4f4f5 !important;\r\n}\r\n\r\n/* Buttons in dark theme */\r\nbody.sc-dark-theme .sc-button-medium,\r\nbody.sc-dark-theme .sc-button-small {\r\n  background-color: #1a1a1f !important;\r\n  border-color: #2a2a30 !important;\r\n  color: #e4e4e7 !important;\r\n}\r\n\r\nbody.sc-dark-theme .sc-button-medium:hover,\r\nbody.sc-dark-theme .sc-button-small:hover {\r\n  background-color: #24242a !important;\r\n  color: #ffffff !important;\r\n}\r\n\r\n/* Waveform Canvas & Artwork: MUST PRESERVE VISIBILITY & ORIGINAL COLORS */\r\nbody.sc-dark-theme .waveformCommentsNode,\r\nbody.sc-dark-theme .waveformCommentsNode canvas {\r\n  filter: none !important;\r\n  opacity: 0.95;\r\n}\r\n\r\nbody.sc-dark-theme .sc-artwork,\r\nbody.sc-dark-theme .image__light,\r\nbody.sc-dark-theme .visualSound__wrapper,\r\nbody.sc-dark-theme img {\r\n  filter: none !important;\r\n}\r\n\r\n/* Active states for Shuffle, Repeat and Like buttons in Deep Dark Theme */\r\nbody.sc-dark-theme .playControls .shuffleControl.m-shuffling,\r\nbody.sc-dark-theme .playControls .shuffleControl[aria-checked="true"],\r\nbody.sc-dark-theme .playControls .repeatControl.m-one,\r\nbody.sc-dark-theme .playControls .repeatControl.m-all,\r\nbody.sc-dark-theme .playbackSoundBadge__like.sc-button-selected,\r\nbody.sc-dark-theme .playbackSoundBadge__like[aria-pressed="true"],\r\nbody.sc-dark-theme .sc-button-like.sc-button-selected,\r\nbody.sc-dark-theme .sc-button-like[aria-pressed="true"] {\r\n  color: #ff5500 !important;\r\n  border-color: rgba(255, 85, 0, 0.45) !important;\r\n  background-color: rgba(255, 85, 0, 0.14) !important;\r\n}\r\n\r\nbody.sc-dark-theme .playControls .shuffleControl.m-shuffling svg,\r\nbody.sc-dark-theme .playControls .shuffleControl[aria-checked="true"] svg,\r\nbody.sc-dark-theme .playControls .repeatControl.m-one svg,\r\nbody.sc-dark-theme .playControls .repeatControl.m-all svg,\r\nbody.sc-dark-theme .playbackSoundBadge__like.sc-button-selected svg,\r\nbody.sc-dark-theme .playbackSoundBadge__like[aria-pressed="true"] svg,\r\nbody.sc-dark-theme .sc-button-like.sc-button-selected svg,\r\nbody.sc-dark-theme .sc-button-like[aria-pressed="true"] svg {\r\n  fill: #ff5500 !important;\r\n  color: #ff5500 !important;\r\n}\r\n';
     }
   });
 
@@ -54,6 +54,9 @@
   }
   async function clearDiscordPresence() {
     return invokeTauri("clear_discord_rpc");
+  }
+  async function getDiscordRpcStatus() {
+    return invokeTauri("get_discord_rpc_status");
   }
   async function sendWindowAction(action) {
     return invokeTauri("window_action", { action });
@@ -354,6 +357,10 @@
           __publicField(this, "selectedProtocol", "socks5");
           __publicField(this, "protocolPills", /* @__PURE__ */ new Map());
           __publicField(this, "discordToggle");
+          __publicField(this, "discordStatusBadge");
+          __publicField(this, "discordStatusDot");
+          __publicField(this, "discordStatusText");
+          __publicField(this, "discordStatusPollTimer", null);
           __publicField(this, "darkThemeToggle");
           __publicField(this, "adblockToggle");
           __publicField(this, "minimizeToTrayToggle");
@@ -388,10 +395,21 @@
           if (!this.isLoadedFromBackend) {
             this.loadBackendSettings().catch(console.error);
           }
+          this.pollDiscordRpcStatus();
+          if (this.discordStatusPollTimer) {
+            window.clearInterval(this.discordStatusPollTimer);
+          }
+          this.discordStatusPollTimer = window.setInterval(() => {
+            this.pollDiscordRpcStatus();
+          }, 2e3);
         }
         close() {
           if (!this.overlay) return;
           this.overlay.classList.remove("visible");
+          if (this.discordStatusPollTimer) {
+            window.clearInterval(this.discordStatusPollTimer);
+            this.discordStatusPollTimer = null;
+          }
           this.callbacks.onClose();
         }
         toggle() {
@@ -410,6 +428,9 @@
           this.darkThemeToggle.checked = this.currentSettings.dark_theme_enabled;
           this.adblockToggle.checked = this.currentSettings.adblock_enabled;
           this.minimizeToTrayToggle.checked = this.currentSettings.minimize_to_tray;
+          if (!this.currentSettings.discord_rpc_enabled) {
+            this.updateDiscordBadgeStatus("disabled");
+          }
         }
         updateActiveProtocolPill(url) {
           const trimmed = url.trim().toLowerCase();
@@ -569,7 +590,7 @@
           discordTitle.className = "sc-section-title";
           discordTitle.textContent = "Discord Rich Presence";
           discordSection.appendChild(discordTitle);
-          const discordRow = this.createToggleRow(
+          const discordRow = this.createDiscordToggleRow(
             "Broadcast Playback to Discord",
             "Show your current track title, artist, high-res artwork, and live progress bar in Discord.",
             (chk) => this.discordToggle = chk
@@ -616,7 +637,7 @@
           versionLabel.textContent = "Desktop Client Version";
           const statusText = document.createElement("span");
           statusText.className = "sc-updater-status";
-          statusText.textContent = "App version: v0.1.0";
+          statusText.textContent = "App version: v0.1.3";
           this.updaterStatusText = statusText;
           updaterInfo.appendChild(versionLabel);
           updaterInfo.appendChild(statusText);
@@ -747,6 +768,120 @@
           row.appendChild(switchLabel);
           return row;
         }
+        createDiscordToggleRow(label, description, setRef) {
+          const row = document.createElement("div");
+          row.className = "sc-setting-row";
+          const info = document.createElement("div");
+          info.className = "sc-setting-info";
+          const labelSpan = document.createElement("span");
+          labelSpan.className = "sc-setting-label";
+          labelSpan.textContent = label;
+          const descSpan = document.createElement("span");
+          descSpan.className = "sc-setting-desc";
+          descSpan.textContent = description;
+          info.appendChild(labelSpan);
+          info.appendChild(descSpan);
+          const rightContainer = document.createElement("div");
+          rightContainer.style.display = "flex";
+          rightContainer.style.alignItems = "center";
+          rightContainer.style.gap = "12px";
+          const badge = document.createElement("span");
+          badge.className = "sc-status-badge";
+          badge.style.display = "inline-flex";
+          badge.style.alignItems = "center";
+          badge.style.gap = "6px";
+          badge.style.padding = "3px 9px";
+          badge.style.borderRadius = "999px";
+          badge.style.fontSize = "11px";
+          badge.style.fontWeight = "500";
+          badge.style.transition = "all 0.2s ease";
+          const dot = document.createElement("span");
+          dot.className = "sc-status-dot";
+          dot.style.width = "6px";
+          dot.style.height = "6px";
+          dot.style.borderRadius = "50%";
+          dot.style.flexShrink = "0";
+          const badgeText = document.createElement("span");
+          badgeText.textContent = "Waiting for Discord desktop app...";
+          badge.appendChild(dot);
+          badge.appendChild(badgeText);
+          this.discordStatusBadge = badge;
+          this.discordStatusDot = dot;
+          this.discordStatusText = badgeText;
+          const switchLabel = document.createElement("label");
+          switchLabel.className = "sc-switch";
+          const input = document.createElement("input");
+          input.type = "checkbox";
+          input.addEventListener("change", () => {
+            if (!input.checked) {
+              this.updateDiscordBadgeStatus("disabled");
+            } else {
+              this.pollDiscordRpcStatus();
+            }
+          });
+          const slider = document.createElement("span");
+          slider.className = "sc-switch-slider";
+          switchLabel.appendChild(input);
+          switchLabel.appendChild(slider);
+          setRef(input);
+          rightContainer.appendChild(badge);
+          rightContainer.appendChild(switchLabel);
+          row.appendChild(info);
+          row.appendChild(rightContainer);
+          return row;
+        }
+        updateDiscordBadgeStatus(status) {
+          if (!this.discordStatusBadge || !this.discordStatusDot || !this.discordStatusText) return;
+          if (!this.discordToggle.checked || status === "disabled") {
+            this.discordStatusText.textContent = "Disabled";
+            this.discordStatusBadge.style.background = "rgba(255, 255, 255, 0.04)";
+            this.discordStatusBadge.style.borderColor = "rgba(255, 255, 255, 0.08)";
+            this.discordStatusBadge.style.color = "#8e8e98";
+            this.discordStatusDot.style.background = "#6b6b78";
+            this.discordStatusDot.style.boxShadow = "none";
+            return;
+          }
+          switch (status) {
+            case "connected":
+              this.discordStatusText.textContent = "Connected to Discord";
+              this.discordStatusBadge.style.background = "rgba(16, 185, 129, 0.12)";
+              this.discordStatusBadge.style.borderColor = "rgba(16, 185, 129, 0.3)";
+              this.discordStatusBadge.style.color = "#34d399";
+              this.discordStatusDot.style.background = "#10b981";
+              this.discordStatusDot.style.boxShadow = "0 0 6px rgba(16, 185, 129, 0.5)";
+              break;
+            case "permission_denied":
+              this.discordStatusText.textContent = "Access denied \u2014 Discord is running as Administrator";
+              this.discordStatusBadge.style.background = "rgba(239, 68, 68, 0.12)";
+              this.discordStatusBadge.style.borderColor = "rgba(239, 68, 68, 0.3)";
+              this.discordStatusBadge.style.color = "#f87171";
+              this.discordStatusDot.style.background = "#ef4444";
+              this.discordStatusDot.style.boxShadow = "0 0 6px rgba(239, 68, 68, 0.5)";
+              break;
+            case "waiting_for_discord":
+            default:
+              this.discordStatusText.textContent = "Waiting for Discord desktop app...";
+              this.discordStatusBadge.style.background = "rgba(245, 158, 11, 0.12)";
+              this.discordStatusBadge.style.borderColor = "rgba(245, 158, 11, 0.3)";
+              this.discordStatusBadge.style.color = "#fbbf24";
+              this.discordStatusDot.style.background = "#f59e0b";
+              this.discordStatusDot.style.boxShadow = "0 0 6px rgba(245, 158, 11, 0.5)";
+              break;
+          }
+        }
+        async pollDiscordRpcStatus() {
+          if (!this.overlay?.classList.contains("visible")) return;
+          if (!this.discordToggle.checked) {
+            this.updateDiscordBadgeStatus("disabled");
+            return;
+          }
+          try {
+            const status = await getDiscordRpcStatus();
+            this.updateDiscordBadgeStatus(status);
+          } catch (err) {
+            console.warn("[SC-Desktop] Failed to get Discord RPC status:", err);
+          }
+        }
         async saveCurrentForm() {
           const rawUrl = this.proxyUrlInput.value.trim();
           const normalizedUrl = this.normalizeProxyUrl(rawUrl);
@@ -765,6 +900,11 @@
           const saved = await persistSettings(newSettings);
           this.currentSettings = saved;
           this.callbacks.onSettingsChanged(saved);
+          if (!newSettings.discord_rpc_enabled) {
+            this.updateDiscordBadgeStatus("disabled");
+          } else {
+            this.pollDiscordRpcStatus();
+          }
           return saved;
         }
         showToast(msg) {
@@ -973,6 +1113,8 @@
         constructor(initialEnabled) {
           __publicField(this, "lastSentTrack", null);
           __publicField(this, "observer", null);
+          __publicField(this, "observedPlayer", null);
+          __publicField(this, "attachObserverRetryTimer", null);
           __publicField(this, "syncTimer", null);
           __publicField(this, "immediateDebounceTimer", null);
           __publicField(this, "lastSentTime", 0);
@@ -995,16 +1137,18 @@
         }
         registerGlobalControls() {
           window.__sc_toggle_playback = () => {
-            const playBtn = document.querySelector(
-              ".playControls .playControls__play, .playControls button.playControl, button.playControl"
+            const player = document.querySelector(".playControls");
+            const playBtn = player?.querySelector(
+              ".playControls__play, button.playControl"
             );
             if (playBtn) {
               playBtn.click();
             }
           };
           window.__sc_next_track = () => {
-            const nextBtn = document.querySelector(
-              ".playControls .skipControl__next, .playControls button.skipControl__next, button.skipControl__next"
+            const player = document.querySelector(".playControls");
+            const nextBtn = player?.querySelector(
+              ".skipControl__next, button.skipControl__next"
             );
             if (nextBtn) {
               nextBtn.click();
@@ -1022,52 +1166,79 @@
           document.addEventListener("ended", handleAudioEvent, true);
         }
         initObserver() {
-          const attachObserver = () => {
-            const target = document.body;
-            if (!target) {
-              window.setTimeout(attachObserver, 50);
+          const tryAttach = () => {
+            const player = document.querySelector(".playControls");
+            if (!player) {
+              if (this.attachObserverRetryTimer === null) {
+                this.attachObserverRetryTimer = window.setInterval(() => {
+                  const el = document.querySelector(".playControls");
+                  if (el) {
+                    if (this.attachObserverRetryTimer !== null) {
+                      window.clearInterval(this.attachObserverRetryTimer);
+                      this.attachObserverRetryTimer = null;
+                    }
+                    this.observePlayer(el);
+                  }
+                }, 500);
+              }
               return;
             }
-            this.observer = new MutationObserver((mutations) => {
-              let relevantMutation = false;
-              for (const m of mutations) {
-                if (m.type === "childList" || m.type === "attributes" && (m.attributeName === "class" || m.attributeName === "title" || m.attributeName === "aria-label" || m.attributeName === "href")) {
-                  relevantMutation = true;
-                  break;
-                }
-              }
-              if (relevantMutation) {
-                this.triggerImmediate();
-              }
-            });
-            this.observer.observe(target, {
-              childList: true,
-              subtree: true,
-              attributes: true,
-              attributeFilter: [
-                "class",
-                "style",
-                "title",
-                "aria-label",
-                "aria-valuenow",
-                "aria-valuemax",
-                "href"
-              ]
-            });
+            if (this.attachObserverRetryTimer !== null) {
+              window.clearInterval(this.attachObserverRetryTimer);
+              this.attachObserverRetryTimer = null;
+            }
+            this.observePlayer(player);
           };
           if (document.readyState === "loading") {
-            document.addEventListener("DOMContentLoaded", attachObserver);
+            document.addEventListener("DOMContentLoaded", tryAttach);
           } else {
-            attachObserver();
+            tryAttach();
           }
+        }
+        observePlayer(player) {
+          if (this.observer) {
+            this.observer.disconnect();
+          }
+          this.observedPlayer = player;
+          this.observer = new MutationObserver((mutations) => {
+            let relevantMutation = false;
+            for (const m of mutations) {
+              if (m.type === "childList" || m.type === "attributes" && (m.attributeName === "class" || m.attributeName === "title" || m.attributeName === "aria-label" || m.attributeName === "href")) {
+                relevantMutation = true;
+                break;
+              }
+            }
+            if (relevantMutation) {
+              this.triggerImmediate();
+            }
+          });
+          this.observer.observe(player, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: [
+              "class",
+              "style",
+              "title",
+              "aria-label",
+              "aria-valuenow",
+              "aria-valuemax",
+              "href"
+            ]
+          });
+          this.triggerImmediate();
         }
         startInterval() {
           if (this.syncTimer) {
             window.clearInterval(this.syncTimer);
           }
           this.syncTimer = window.setInterval(() => {
+            const player = document.querySelector(".playControls");
+            if (player && (!this.observedPlayer || !this.observedPlayer.isConnected || this.observedPlayer !== player)) {
+              this.observePlayer(player);
+            }
             this.syncNow(false);
-          }, 5e3);
+          }, 2e3);
         }
         /**
          * Fast debounce (<50ms) to coalesce synchronous DOM mutations into a single immediate IPC call.
@@ -1146,7 +1317,7 @@
             if (match && match[1]) {
               let rawUrl = match[1];
               rawUrl = rawUrl.replace(/-t(50|120|200)x\1\./, "-t500x500.");
-              if (rawUrl.startsWith("https://i1.sndcdn.com/") || rawUrl.startsWith("https://a1.sndcdn.com/")) {
+              if (rawUrl.startsWith("https://")) {
                 cover_url = rawUrl;
                 break;
               }

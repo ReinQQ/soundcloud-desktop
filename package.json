@@ -1,20 +1,24 @@
 {
   "name": "scdesktop",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "SoundCloud Native Desktop Client using Tauri v2",
-  "main": "index.js",
+  "type": "module",
   "scripts": {
-    "build:injected": "esbuild injected/index.ts --bundle --loader:.css=text --format=iife --target=es2020 --outfile=src-tauri/injected.js && esbuild injected/index.ts --bundle --loader:.css=text --format=iife --target=es2020 --outfile=dist/injected.js",
-    "build": "npm run build:injected",
-    "dev": "npm run build:injected",
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
     "tauri": "tauri"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.5",
-    "esbuild": "^0.28.2"
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.12.5",
+    "hls.js": "^1.7.4"
   }
 }

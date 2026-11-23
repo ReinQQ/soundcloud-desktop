@@ -1,62 +1,94 @@
 use base64::prelude::*;
 use std::io::{self, Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use tokio::net::TcpListener;
 use url::Url;
 
 pub struct ProxyBridge {
     pub local_port: u16,
-    shutdown: Arc<AtomicBool>,
+    pub upstream_url: String,
+    abort_handle: tokio::task::AbortHandle,
 }
 
 impl ProxyBridge {
-    pub fn start(upstream: Url) -> Result<Self, String> {
+    pub async fn start(upstream: Url) -> Result<Arc<Self>, String> {
         let listener = TcpListener::bind("127.0.0.1:0")
+            .await
             .map_err(|e| format!("Failed to bind local proxy bridge on 127.0.0.1: {e}"))?;
         let local_port = listener
             .local_addr()
             .map_err(|e| format!("Failed to get local port: {e}"))?
             .port();
 
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let shutdown_clone = shutdown.clone();
+        let upstream_url = upstream.to_string();
         let upstream_clone = upstream.clone();
 
-        thread::Builder::new()
-            .name("proxy-bridge-listener".to_string())
-            .spawn(move || {
-                run_bridge_listener(listener, upstream_clone, shutdown_clone);
-            })
-            .map_err(|e| format!("Failed to spawn proxy bridge thread: {e}"))?;
+        let (bridge_tx, bridge_rx) = tokio::sync::oneshot::channel::<Arc<ProxyBridge>>();
 
-        log::info!("Local authenticated proxy bridge running on 127.0.0.1:{local_port} -> {upstream}");
-        Ok(Self {
+        let handle = tokio::spawn(async move {
+            let _bridge_ref = match bridge_rx.await {
+                Ok(b) => b,
+                Err(_) => return,
+            };
+            loop {
+                match listener.accept().await {
+                    Ok((tokio_stream, _addr)) => {
+                        let up = upstream_clone.clone();
+                        tokio::task::spawn_blocking(move || {
+                            if let Ok(std_stream) = tokio_stream.into_std()
+                                && let Err(e) = handle_client(std_stream, &up) {
+                                    log::debug!("Proxy bridge client session ended: {e}");
+                                }
+                        });
+                    }
+                    Err(e) => {
+                        log::debug!("Proxy bridge listener closed or accept error: {e}");
+                        break;
+                    }
+                }
+            }
+        });
+
+        let bridge = Arc::new(Self {
             local_port,
-            shutdown,
-        })
+            upstream_url: upstream_url.clone(),
+            abort_handle: handle.abort_handle(),
+        });
+
+        let _ = bridge_tx.send(bridge.clone());
+
+        log::info!(
+            "Local authenticated proxy bridge running on 127.0.0.1:{local_port} -> {}",
+            crate::settings::redact_proxy_url(&upstream_url)
+        );
+        Ok(bridge)
+    }
+
+    pub fn shutdown(&self) {
+        self.abort_handle.abort();
+        log::info!("[ProxyBridge] Local proxy bridge on port {} shut down", self.local_port);
     }
 
     #[allow(dead_code)]
-    pub fn local_http_url(&self) -> Url {
-        Url::parse(&self.local_http_str()).expect("Valid local proxy URL")
+    pub fn local_http_url(&self) -> Result<Url, url::ParseError> {
+        Url::parse(&self.local_http_str())
     }
 
     pub fn local_http_str(&self) -> String {
         format!("http://127.0.0.1:{}", self.local_port)
     }
+
+    pub fn current_local_endpoint(&self) -> Option<String> {
+        Some(format!("http://127.0.0.1:{}", self.local_port))
+    }
 }
 
 impl Drop for ProxyBridge {
     fn drop(&mut self) {
-        self.shutdown.store(true, Ordering::SeqCst);
-        // Ping the local socket to unblock accept() if needed
-        let _ = TcpStream::connect_timeout(
-            &SocketAddr::from(([127, 0, 0, 1], self.local_port)),
-            Duration::from_millis(50),
-        );
+        self.shutdown();
     }
 }
 
@@ -66,36 +98,6 @@ pub fn needs_proxy_bridge(parsed_url: &Url) -> bool {
 
     // SOCKS proxies or any proxy with credentials require our local loopback bridge
     scheme.starts_with("socks") || has_credentials
-}
-
-fn run_bridge_listener(listener: TcpListener, upstream: Url, shutdown: Arc<AtomicBool>) {
-    // Set a short timeout on accept so we can periodically check shutdown
-    let _ = listener.set_nonblocking(false);
-
-    for stream_res in listener.incoming() {
-        if shutdown.load(Ordering::SeqCst) {
-            break;
-        }
-
-        match stream_res {
-            Ok(client_stream) => {
-                let upstream = upstream.clone();
-                thread::Builder::new()
-                    .name("proxy-bridge-client".to_string())
-                    .spawn(move || {
-                        if let Err(e) = handle_client(client_stream, &upstream) {
-                            log::debug!("Proxy bridge client session ended: {e}");
-                        }
-                    })
-                    .ok();
-            }
-            Err(e) => {
-                if !shutdown.load(Ordering::SeqCst) {
-                    log::warn!("Proxy bridge accept error: {e}");
-                }
-            }
-        }
-    }
 }
 
 fn handle_client(mut client: TcpStream, upstream: &Url) -> io::Result<()> {
@@ -133,33 +135,46 @@ fn handle_client(mut client: TcpStream, upstream: &Url) -> io::Result<()> {
     if method == "CONNECT" {
         // HTTPS Tunneling
         let (host, port) = parse_host_port(target, 443);
+        log::info!(
+            "[ProxyBridge] CONNECT {}:{} -> upstream {}",
+            host,
+            port,
+            crate::settings::redact_proxy_url(upstream.as_ref())
+        );
         let upstream_stream = connect_upstream_tunnel(upstream, &host, port)?;
 
         // Send 200 Connection Established back to client
         client.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")?;
         client.flush()?;
 
-        // Reset timeouts for streaming
-        client.set_read_timeout(None)?;
-        client.set_write_timeout(None)?;
-        upstream_stream.set_read_timeout(None)?;
-        upstream_stream.set_write_timeout(None)?;
+        // Apply streaming keep-alive idle timeouts (180s)
+        client.set_read_timeout(Some(Duration::from_secs(180)))?;
+        client.set_write_timeout(Some(Duration::from_secs(180)))?;
+        upstream_stream.set_read_timeout(Some(Duration::from_secs(180)))?;
+        upstream_stream.set_write_timeout(Some(Duration::from_secs(180)))?;
 
         // Bidirectional relay
         relay_bidirectional(client, upstream_stream)?;
     } else {
         // Plain HTTP Request
         let (host, port) = parse_host_port_from_request(target, &header_str, 80);
+        log::info!(
+            "[ProxyBridge] {} {}:{} -> upstream {}",
+            method,
+            host,
+            port,
+            crate::settings::redact_proxy_url(upstream.as_ref())
+        );
         let mut upstream_stream = connect_upstream_tunnel(upstream, &host, port)?;
 
         // Forward the original request bytes
         upstream_stream.write_all(&header_buf)?;
         upstream_stream.flush()?;
 
-        client.set_read_timeout(None)?;
-        client.set_write_timeout(None)?;
-        upstream_stream.set_read_timeout(None)?;
-        upstream_stream.set_write_timeout(None)?;
+        client.set_read_timeout(Some(Duration::from_secs(180)))?;
+        client.set_write_timeout(Some(Duration::from_secs(180)))?;
+        upstream_stream.set_read_timeout(Some(Duration::from_secs(180)))?;
+        upstream_stream.set_write_timeout(Some(Duration::from_secs(180)))?;
 
         relay_bidirectional(client, upstream_stream)?;
     }
@@ -176,13 +191,12 @@ fn parse_host_port(target: &str, default_port: u16) -> (String, u16) {
 }
 
 fn parse_host_port_from_request(target: &str, headers: &str, default_port: u16) -> (String, u16) {
-    if target.starts_with("http://") || target.starts_with("https://") {
-        if let Ok(u) = Url::parse(target) {
+    if (target.starts_with("http://") || target.starts_with("https://"))
+        && let Ok(u) = Url::parse(target) {
             let h = u.host_str().unwrap_or("127.0.0.1").to_string();
             let p = u.port().unwrap_or(default_port);
             return (h, p);
         }
-    }
 
     for line in headers.lines() {
         if line.to_lowercase().starts_with("host:") {
@@ -429,19 +443,66 @@ fn socks4a_handshake(
     Ok(())
 }
 
-fn relay_bidirectional(mut client: TcpStream, mut upstream: TcpStream) -> io::Result<()> {
-    let mut client_read = client.try_clone()?;
-    let mut upstream_write = upstream.try_clone()?;
+fn copy_directional(mut reader: TcpStream, mut writer: TcpStream) -> io::Result<()> {
+    let mut buf = [0u8; 16384];
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => {
+                let _ = writer.shutdown(std::net::Shutdown::Write);
+                break;
+            }
+            Ok(n) => {
+                let mut written = 0;
+                while written < n {
+                    match writer.write(&buf[written..n]) {
+                        Ok(0) => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::WriteZero,
+                                "zero bytes written to stream",
+                            ));
+                        }
+                        Ok(m) => {
+                            written += m;
+                        }
+                        Err(ref e)
+                            if e.kind() == io::ErrorKind::WouldBlock
+                                || e.kind() == io::ErrorKind::Interrupted =>
+                        {
+                            thread::yield_now();
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                let _ = writer.flush();
+            }
+            Err(ref e)
+                if e.kind() == io::ErrorKind::WouldBlock
+                    || e.kind() == io::ErrorKind::Interrupted =>
+            {
+                thread::yield_now();
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+fn relay_bidirectional(client: TcpStream, upstream: TcpStream) -> io::Result<()> {
+    client.set_read_timeout(Some(Duration::from_secs(180)))?;
+    client.set_write_timeout(Some(Duration::from_secs(180)))?;
+    upstream.set_read_timeout(Some(Duration::from_secs(180)))?;
+    upstream.set_write_timeout(Some(Duration::from_secs(180)))?;
+
+    let client_read = client.try_clone()?;
+    let upstream_write = upstream.try_clone()?;
 
     let client_to_upstream = thread::Builder::new()
         .name("relay-c2u".to_string())
         .spawn(move || {
-            let _ = io::copy(&mut client_read, &mut upstream_write);
-            let _ = upstream_write.shutdown(std::net::Shutdown::Write);
+            let _ = copy_directional(client_read, upstream_write);
         });
 
-    let _ = io::copy(&mut upstream, &mut client);
-    let _ = client.shutdown(std::net::Shutdown::Write);
+    let _ = copy_directional(upstream, client);
 
     if let Ok(handle) = client_to_upstream {
         let _ = handle.join();

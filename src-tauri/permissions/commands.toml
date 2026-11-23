@@ -42,3 +42,136 @@ commands.allow = ["check_update"]
 identifier = "allow-install-update"
 description = "Enables install_update command"
 commands.allow = ["install_update"]
+
+[[permission]]
+identifier = "allow-sc-get-discover"
+description = "Enables sc_get_discover command"
+commands.allow = ["sc_get_discover"]
+
+[[permission]]
+identifier = "allow-sc-get-stream"
+description = "Enables sc_get_stream command"
+commands.allow = ["sc_get_stream"]
+
+[[permission]]
+identifier = "allow-sc-search"
+description = "Enables sc_search command"
+commands.allow = ["sc_search"]
+
+[[permission]]
+identifier = "allow-sc-get-library"
+description = "Enables sc_get_library command"
+commands.allow = ["sc_get_library"]
+
+[[permission]]
+identifier = "allow-sc-get-playlist"
+description = "Enables sc_get_playlist command"
+commands.allow = ["sc_get_playlist"]
+
+[[permission]]
+identifier = "allow-sc-get-track"
+description = "Enables sc_get_track command"
+commands.allow = ["sc_get_track"]
+
+[[permission]]
+identifier = "allow-sc-toggle-like"
+description = "Enables sc_toggle_like command"
+commands.allow = ["sc_toggle_like"]
+
+[[permission]]
+identifier = "allow-sc-resolve-stream"
+description = "Enables sc_resolve_stream command"
+commands.allow = ["sc_resolve_stream"]
+
+[[permission]]
+identifier = "allow-sc-clear-stream-cache"
+description = "Enables sc_clear_stream_cache command"
+commands.allow = ["sc_clear_stream_cache"]
+
+[[permission]]
+identifier = "allow-sc-login"
+description = "Enables sc_login command"
+commands.allow = ["sc_login"]
+
+[[permission]]
+identifier = "allow-sc-logout"
+description = "Enables sc_logout command"
+commands.allow = ["sc_logout"]
+
+[[permission]]
+identifier = "allow-sc-get-me"
+description = "Enables sc_get_me command"
+commands.allow = ["sc_get_me"]
+
+[[permission]]
+identifier = "allow-test-proxy"
+description = "Enables test_proxy command"
+commands.allow = ["test_proxy"]
+
+[[permission]]
+identifier = "allow-log-frontend-error"
+description = "Enables log_frontend_error command"
+commands.allow = ["log_frontend_error"]
+
+[[permission]]
+identifier = "allow-sc-frontend-ready"
+description = "Enables sc_frontend_ready command"
+commands.allow = ["sc_frontend_ready"]
+
+[[permission]]
+identifier = "allow-sc-login-with-token"
+description = "Enables sc_login_with_token command"
+commands.allow = ["sc_login_with_token"]
+
+[[permission]]
+identifier = "allow-sc-get-user-tracks"
+description = "Enables sc_get_user_tracks command"
+commands.allow = ["sc_get_user_tracks"]
+
+[[permission]]
+identifier = "allow-sc-add-track-to-playlist"
+description = "Enables sc_add_track_to_playlist command"
+commands.allow = ["sc_add_track_to_playlist"]
+
+[[permission]]
+identifier = "allow-sc-create-playlist"
+description = "Enables sc_create_playlist command"
+commands.allow = ["sc_create_playlist"]
+
+[[permission]]
+identifier = "allow-sc-get-track-detail"
+description = "Enables sc_get_track_detail command"
+commands.allow = ["sc_get_track_detail"]
+
+[[permission]]
+identifier = "allow-sc-get-track-comments"
+description = "Enables sc_get_track_comments command"
+commands.allow = ["sc_get_track_comments"]
+
+[[permission]]
+identifier = "allow-sc-post-track-comment"
+description = "Enables sc_post_track_comment command"
+commands.allow = ["sc_post_track_comment"]
+
+[[permission]]
+identifier = "allow-sc-update-profile"
+description = "Enables sc_update_profile command"
+commands.allow = ["sc_update_profile"]
+
+[[permission]]
+identifier = "allow-sc-upload-profile-image"
+description = "Enables sc_upload_profile_image command"
+commands.allow = ["sc_upload_profile_image"]
+
+[[permission]]
+identifier = "allow-sc-get-user-profile"
+description = "Enables sc_get_user_profile command"
+commands.allow = ["sc_get_user_profile"]
+
+[[permission]]
+identifier = "allow-sc-toggle-follow"
+description = "Enables sc_toggle_follow command"
+commands.allow = ["sc_toggle_follow"]
+
+
+

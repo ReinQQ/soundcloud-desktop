@@ -1,16 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "SoundCloud Desktop restricted remote capability",
+  "description": "SoundCloud Desktop standalone client capability",
   "windows": [
     "main"
   ],
-  "remote": {
-    "urls": [
-      "https://soundcloud.com/*",
-      "https://*.soundcloud.com/*"
-    ]
-  },
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
@@ -22,6 +16,32 @@
     "allow-window-action",
     "allow-restart-app",
     "allow-check-update",
-    "allow-install-update"
+    "allow-install-update",
+    "allow-sc-get-discover",
+    "allow-sc-get-stream",
+    "allow-sc-search",
+    "allow-sc-get-library",
+    "allow-sc-get-playlist",
+    "allow-sc-get-track",
+    "allow-sc-toggle-like",
+    "allow-sc-resolve-stream",
+    "allow-sc-clear-stream-cache",
+    "allow-sc-login",
+    "allow-sc-login-with-token",
+    "allow-sc-logout",
+    "allow-sc-get-me",
+    "allow-sc-get-user-tracks",
+    "allow-sc-add-track-to-playlist",
+    "allow-sc-create-playlist",
+    "allow-sc-get-track-detail",
+    "allow-sc-get-track-comments",
+    "allow-sc-post-track-comment",
+    "allow-sc-update-profile",
+    "allow-sc-upload-profile-image",
+    "allow-sc-get-user-profile",
+    "allow-sc-toggle-follow",
+    "allow-test-proxy",
+    "allow-log-frontend-error",
+    "allow-sc-frontend-ready"
   ]
 }

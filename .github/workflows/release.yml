@@ -34,7 +34,7 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build injected scripts
+      - name: Build frontend application
         run: npm run build
 
       - name: Build and Publish Tauri Application

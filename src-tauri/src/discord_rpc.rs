@@ -24,8 +24,6 @@ pub enum DiscordRpcCommand {
     Update(TrackPayload),
     Clear,
     SetEnabled(bool),
-    #[allow(dead_code)]
-    SetAppId(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -55,12 +53,14 @@ impl DiscordRpcHandle {
         let status = Arc::new(RwLock::new(initial_status));
         let status_for_worker = status.clone();
 
-        thread::Builder::new()
+        if let Err(e) = thread::Builder::new()
             .name("discord-rpc-worker".to_string())
             .spawn(move || {
                 run_discord_worker(receiver, status_for_worker, initial_enabled);
             })
-            .expect("Failed to spawn discord-rpc background thread");
+        {
+            log::error!("Failed to spawn discord-rpc background thread: {e}");
+        }
 
         Self { sender, status }
     }
@@ -118,26 +118,22 @@ pub fn sanitize_text(s: &str, max_len: usize) -> String {
 /// Discord allows large_image URLs if they start with "https://" and are <= 256 chars.
 pub fn validate_cover_url(url: &str) -> Option<String> {
     let trimmed = url.trim();
-    if trimmed.starts_with("https://") && trimmed.len() <= 256 {
-        if let Ok(parsed) = url::Url::parse(trimmed) {
-            if parsed.scheme() == "https" && parsed.host().is_some() {
+    if trimmed.starts_with("https://") && trimmed.len() <= 256
+        && let Ok(parsed) = url::Url::parse(trimmed)
+            && parsed.scheme() == "https" && parsed.host().is_some() {
                 return Some(trimmed.to_string());
             }
-        }
-    }
     None
 }
 
 /// Discord buttons require valid URLs <= 512 chars starting with "https://".
 pub fn validate_track_url(url: &str) -> Option<String> {
     let trimmed = url.trim();
-    if trimmed.starts_with("https://") && trimmed.len() <= 512 {
-        if let Ok(parsed) = url::Url::parse(trimmed) {
-            if parsed.scheme() == "https" && parsed.host().is_some() {
+    if trimmed.starts_with("https://") && trimmed.len() <= 512
+        && let Ok(parsed) = url::Url::parse(trimmed)
+            && parsed.scheme() == "https" && parsed.host().is_some() {
                 return Some(trimmed.to_string());
             }
-        }
-    }
     None
 }
 
@@ -220,6 +216,12 @@ pub fn send_activity_packet(
     payload: &TrackPayload,
     last_snapshot: &mut Option<ActivitySnapshot>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if !payload.is_playing {
+        *last_snapshot = None;
+        client.clear_activity()?;
+        return Ok(());
+    }
+
     let raw_title = if payload.title.trim().is_empty() {
         "Unknown Track"
     } else {
@@ -324,11 +326,10 @@ pub fn send_activity_packet(
 }
 
 fn set_status(status_lock: &Arc<RwLock<String>>, new_status: &str) {
-    if let Ok(mut lock) = status_lock.write() {
-        if *lock != new_status {
+    if let Ok(mut lock) = status_lock.write()
+        && *lock != new_status {
             *lock = new_status.to_string();
         }
-    }
 }
 
 fn run_discord_worker(
@@ -344,8 +345,8 @@ fn run_discord_worker(
 
     loop {
         // Non-blocking reconnect check every 3 seconds whenever enabled and IPC client is not connected
-        if enabled && client.is_none() {
-            if last_connect_attempt.elapsed() >= Duration::from_secs(3) {
+        if enabled && client.is_none()
+            && last_connect_attempt.elapsed() >= Duration::from_secs(3) {
                 last_connect_attempt = Instant::now();
                 let mut c = DiscordIpcClient::new(DISCORD_APP_ID);
                 match c.connect() {
@@ -377,7 +378,6 @@ fn run_discord_worker(
                     }
                 }
             }
-        }
 
         // Receive incoming command with 250ms timeout
         let mut cmd = match receiver.recv_timeout(Duration::from_millis(250)) {
@@ -455,24 +455,33 @@ fn handle_command(
                 *last_connect_attempt = Instant::now() - Duration::from_secs(3);
             }
         }
-        DiscordRpcCommand::SetAppId(_) => {
-            // App ID is hardcoded to DISCORD_APP_ID
-        }
         DiscordRpcCommand::Clear => {
             *cached_track = None;
             *last_snapshot = None;
-            if *enabled {
-                if let Some(c) = client.as_mut() {
-                    if let Err(e) = c.clear_activity() {
+            if *enabled
+                && let Some(c) = client.as_mut()
+                    && let Err(e) = c.clear_activity() {
                         log::warn!("Failed to clear Discord activity: {e}. Dropping client connection.");
                         let _ = c.close();
                         *client = None;
                         set_status(status, "waiting_for_discord");
                     }
-                }
-            }
         }
         DiscordRpcCommand::Update(payload) => {
+            if !payload.is_playing {
+                *cached_track = None;
+                *last_snapshot = None;
+                if *enabled
+                    && let Some(c) = client.as_mut()
+                        && let Err(e) = c.clear_activity() {
+                            log::warn!("Failed to clear Discord activity on pause: {e}. Dropping client connection.");
+                            let _ = c.close();
+                            *client = None;
+                            set_status(status, "waiting_for_discord");
+                        }
+                return;
+            }
+
             *cached_track = Some(payload.clone());
             if *enabled {
                 if let Some(c) = client.as_mut() {
@@ -626,7 +635,7 @@ mod tests {
         assert!(!seek_drift_small);
 
         // State change (play -> pause) -> should NOT be deduplicated
-        let playing_changed = false != snapshot.is_playing;
+        let playing_changed = snapshot.is_playing;
         assert!(playing_changed);
     }
 

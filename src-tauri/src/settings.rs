@@ -16,6 +16,11 @@ pub struct AppSettings {
     pub dark_theme_enabled: bool,
     pub minimize_to_tray: bool,
     pub proxy_active: bool,
+    pub oauth_token: Option<String>,
+    #[serde(default)]
+    pub cached_client_id: Option<String>,
+    #[serde(default)]
+    pub datadome_cookie: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -29,6 +34,9 @@ impl Default for AppSettings {
             dark_theme_enabled: true,
             minimize_to_tray: true,
             proxy_active: false,
+            oauth_token: None,
+            cached_client_id: None,
+            datadome_cookie: None,
         }
     }
 }
@@ -43,16 +51,49 @@ pub fn is_valid_proxy_scheme(url: &str) -> bool {
         || lower.starts_with("socks5h://")
 }
 
+pub fn redact_proxy_url(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if let Ok(mut parsed) = url::Url::parse(trimmed) {
+        if parsed.password().is_some() {
+            let _ = parsed.set_password(Some("***"));
+        }
+        return parsed.to_string();
+    }
+    if let Some((creds, host)) = trimmed.split_once('@')
+        && let Some((user, _pass)) = creds.split_once(':') {
+            return format!("{user}:***@{host}");
+        }
+    trimmed.to_string()
+}
+
 pub fn validate_proxy_url(raw: &str) -> Result<url::Url, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err("Proxy URL cannot be empty".to_string());
     }
 
+    let without_scheme = if let Some(idx) = trimmed.find("://") {
+        &trimmed[idx + 3..]
+    } else {
+        trimmed
+    };
+
+    if let Some((creds, _host_port)) = without_scheme.split_once('@') {
+        if !creds.contains(':') {
+            return Err("Proxy credentials format invalid: missing colon ':' between username and password (expected format: username:password@host:port)".to_string());
+        }
+        let (user, _pass) = creds.split_once(':').unwrap_or(("", ""));
+        if user.is_empty() {
+            return Err("Proxy username cannot be empty".to_string());
+        }
+    }
+
     let full_url_str = if is_valid_proxy_scheme(trimmed) {
         trimmed.to_string()
     } else {
-        // Auto-prefix with socks5:// if scheme is missing
         format!("socks5://{trimmed}")
     };
 
@@ -60,6 +101,9 @@ pub fn validate_proxy_url(raw: &str) -> Result<url::Url, String> {
         .map_err(|e| format!("Invalid proxy URL format: {e}"))?;
     if parsed.host().is_none() {
         return Err("Proxy URL must specify a host".to_string());
+    }
+    if parsed.port().is_none() {
+        return Err("Proxy URL must specify a port (e.g. host:port)".to_string());
     }
     Ok(parsed)
 }
@@ -93,7 +137,6 @@ impl AppSettings {
         match fs::read_to_string(path) {
             Ok(content) => match serde_json::from_str::<AppSettings>(&content) {
                 Ok(mut settings) => {
-                    // Hardcode Discord App ID to DISCORD_APP_ID regardless of settings.json content
                     settings.discord_app_id = DISCORD_APP_ID.to_string();
                     settings
                 }
@@ -134,6 +177,30 @@ impl AppSettings {
             self.proxy_url = format!("socks5://{}", self.proxy_url);
         }
         self.discord_app_id = DISCORD_APP_ID.to_string();
+        if let Some(token) = &self.oauth_token {
+            let trimmed = token.trim().to_string();
+            if trimmed.is_empty() {
+                self.oauth_token = None;
+            } else {
+                self.oauth_token = Some(trimmed);
+            }
+        }
+        if let Some(id) = &self.cached_client_id {
+            let trimmed = id.trim().to_string();
+            if trimmed.is_empty() {
+                self.cached_client_id = None;
+            } else {
+                self.cached_client_id = Some(trimmed);
+            }
+        }
+        if let Some(dd) = &self.datadome_cookie {
+            let trimmed = dd.trim().to_string();
+            if trimmed.is_empty() {
+                self.datadome_cookie = None;
+            } else {
+                self.datadome_cookie = Some(trimmed);
+            }
+        }
     }
 }
 
@@ -151,6 +218,9 @@ mod tests {
         assert!(s.adblock_enabled);
         assert!(s.dark_theme_enabled);
         assert!(s.minimize_to_tray);
+        assert_eq!(s.oauth_token, None);
+        assert_eq!(s.cached_client_id, None);
+        assert_eq!(s.datadome_cookie, None);
     }
 
     #[test]
@@ -162,11 +232,18 @@ mod tests {
         assert!(validate_proxy_url("socks5://127.0.0.1:10808").is_ok());
         assert!(validate_proxy_url("socks5h://user:secret@127.0.0.1:10808").is_ok());
 
-        // Test auto-prefixing when user pastes without scheme
         let auto_prefixed = validate_proxy_url("user:pass@127.0.0.1:10808");
         assert!(auto_prefixed.is_ok());
         assert_eq!(auto_prefixed.unwrap().scheme(), "socks5");
 
         assert!(validate_proxy_url("").is_err());
+        assert!(validate_proxy_url("reinqqrqqitzzz@64.188.92.231:44333").is_err());
+        assert!(validate_proxy_url("http://reinqqrqqitzzz@64.188.92.231:44333").is_err());
+        assert!(validate_proxy_url("http://reinqq:rqqitzzz@64.188.92.231:44333").is_ok());
+
+        assert_eq!(
+            redact_proxy_url("http://reinqq:rqqitzzz@64.188.92.231:44333"),
+            "http://reinqq:***@64.188.92.231:44333/"
+        );
     }
 }

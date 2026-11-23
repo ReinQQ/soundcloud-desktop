@@ -1,11 +1,4 @@
-<#
-.SYNOPSIS
-  Builds, signs, and generates latest.json updater manifest for SoundCloud Desktop.
-.DESCRIPTION
-  Compiles the desktop client, signs the release with Tauri updater keypair,
-  and prepares a ready-to-upload 'release-dist' directory for Nginx hosting at:
-  https://buster.gripe/scdesktop/
-#>
+param()
 
 $ErrorActionPreference = "Stop"
 
@@ -15,7 +8,6 @@ Set-Location $rootDir
 
 Write-Host "==> Preparing SoundCloud Desktop Signed Release Build..." -ForegroundColor Cyan
 
-# 1. Check or set signing private key
 $keyFile = Join-Path $rootDir ".keys\scdesktop.key"
 if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
     if (Test-Path $keyFile) {
@@ -24,24 +16,19 @@ if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
         Write-Host "==> Loaded private key from .keys/scdesktop.key" -ForegroundColor Green
     } else {
         Write-Warning "No .keys/scdesktop.key found and TAURI_SIGNING_PRIVATE_KEY is not set."
-        Write-Warning "Build may complete without updater signatures."
     }
 }
 
-# 2. Build injection script bundle
-Write-Host "==> Compiling injected frontend assets..." -ForegroundColor Cyan
+Write-Host "==> Compiling frontend assets..." -ForegroundColor Cyan
 npm run build
 
-# 3. Read app version from tauri.conf.json
 $tauriConfPath = Join-Path $rootDir "src-tauri\tauri.conf.json"
 $tauriConf = Get-Content $tauriConfPath -Raw | ConvertFrom-Json
 $version = $tauriConf.version
 Write-Host "==> Building SoundCloud Desktop release version v$version..." -ForegroundColor Cyan
 
-# 4. Run Tauri production build
 npx tauri build
 
-# 5. Locate bundle output and prepare release-dist
 $bundleDir = Join-Path $rootDir "src-tauri\target\release\bundle"
 $outDir = Join-Path $rootDir "release-dist"
 if (Test-Path $outDir) {
@@ -57,7 +44,6 @@ $manifest = @{
     platforms = @{}
 }
 
-# Look for Windows artifacts (nsis/msi)
 $nsisDir = Join-Path $bundleDir "nsis"
 if (Test-Path $nsisDir) {
     $zipFiles = Get-ChildItem -Path $nsisDir -Filter "*.zip"
@@ -68,7 +54,6 @@ if (Test-Path $nsisDir) {
         Copy-Item -Path $file.FullName -Destination $outDir -Force
     }
 
-    # Find the zip artifact and its signature for the updater
     if ($zipFiles.Count -gt 0) {
         $zipName = $zipFiles[0].Name
         $sigName = "$zipName.sig"
@@ -86,17 +71,9 @@ if (Test-Path $nsisDir) {
     }
 }
 
-# Write latest.json
 $manifestJson = $manifest | ConvertTo-Json -Depth 5
 $manifestPath = Join-Path $outDir "latest.json"
 Set-Content -Path $manifestPath -Value $manifestJson -Encoding UTF8
 
 Write-Host "`n==> Signed release package generated in 'release-dist/':" -ForegroundColor Green
 Get-ChildItem -Path $outDir | Format-Table Name, Length, LastWriteTime
-
-Write-Host @"
-
-Upload instructions for Nginx static hosting (https://buster.gripe/scdesktop/):
-  rsync -avzP release-dist/ user@buster.gripe:/var/www/scdesktop/
-
-"@ -ForegroundColor Yellow

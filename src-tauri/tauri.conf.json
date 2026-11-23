@@ -1,15 +1,15 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "soundcloud-desktop",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "identifier": "io.github.reinqq.soundcloud",
   "build": {
     "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build"
   },
   "app": {
-    "withGlobalTauri": true,
     "security": {
       "csp": null
     }

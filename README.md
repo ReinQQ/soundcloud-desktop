@@ -1,37 +1,59 @@
-# SoundCloud Desktop
+# SoundCloud Desktop (`v0.2.0`)
 
-Standalone native desktop client for SoundCloud powered by Tauri v2, Rust, Vite, and TypeScript.
+Standalone native desktop client for SoundCloud built with **Tauri v2**, **Rust** (`api-v2.soundcloud.com`, `ProxyBridge`, `MediaRelay`, Discord Rich Presence), and **Vite + Vanilla TypeScript + `hls.js`** (`src/` -> `dist/`).
 
 ## Architecture
 
-- **Backend (Rust / Tauri v2):** Communicates with SoundCloud's API (`api-v2.soundcloud.com`), manages HTTP/SOCKS proxy connections, resolves direct playable audio streams, extracts client IDs, handles Discord Rich Presence, and manages application settings.
-- **Frontend (Vite / TypeScript / HLS.js):** 100% standalone desktop client without external web wrappers. Renders native views (Home, Feed, Library, Search, Playlist/Track details) and uses HTML5 audio with `hls.js` for ad-free stream playback.
+- **Backend (Rust / Tauri v2):** Communicates directly with SoundCloud API v2 (`api-v2.soundcloud.com`), caches extracted `client_id` values across launches, relays media segments and Widevine manifests via local `MediaRelay`, tunnels authenticated `HTTP`/`HTTPS`/`SOCKS4`/`SOCKS5` proxies through local loopback `ProxyBridge`, drives Discord Rich Presence over local IPC, and manages tray controls, settings, and signed updates.
+- **Frontend (Vite / Vanilla TypeScript / `hls.js`):** Renders native views in `src/` with browser history navigation (`pushState` / mouse Back & Forward), HTML5 `<audio>` + `hls.js` stream playback, real-time active equalizer indicators, and local like/queue state.
 
-## Features
+## Key Features (`v0.2.0`)
 
-- **Standalone Player Engine:** Custom audio pipeline supporting progressive MP3 and HLS audio streaming, shuffle, repeat, queue management, and volume control.
-- **Discord Rich Presence:** Displays track title, artist, high-resolution artwork (`t500x500`), and live playback timestamps over local Discord IPC.
-- **Proxy Support:** Supports HTTP, HTTPS, SOCKS4, and SOCKS5 proxies for all API and media requests.
-- **OAuth Login:** Dedicated sign-in window that authenticates against SoundCloud and saves session credentials locally.
-- **Theme System:** Apple Music dark gray default theme with optional AMOLED Deep Dark mode.
-- **Frameless Titlebar & Tray:** Native window controls, proxy and RPC status indicators, and background playback via system tray.
+- **Playback & Media Pipeline:** Direct stream resolution with cached `client_id` and OAuth fallback, progressive MP3 and HLS streaming via `hls.js` / HTML5 `<audio>` (including Widevine DRM playback and `MediaRelay`), interactive queue drawer, shuffle/repeat modes, and volume popup control.
+- **Navigation & Views:**
+  - Floating sidebar navigation (`Home`, `Feed`, `Library`, `Likes`, `Playlists`).
+  - Top-header search bar (`Ctrl+K`) with instant navigation and `All`, `Tracks`, `Playlists`, and `Users` tabs.
+  - Dedicated `TrackDetailView` displaying artwork, metadata, tags, clickable `@ m:ss` timestamped comments, and comment posting.
+  - Artist & user profile views with follow/unfollow toggles, verified badges, location/bio metadata, tracks/playlists/likes tabs, and inline own-profile editing (avatar, banner, display name, city, country, bio).
+- **Playlists:** Create public or private playlists, add tracks to playlists from any view or dock control, load full paginated created and liked playlists, and play system playlists (including *More of what you like* URNs).
+- **Networking, Auth & Integrations:** Multi-protocol proxy support (`HTTP`, `HTTPS`, `SOCKS4`, `SOCKS5`) with local `ProxyBridge` for authenticated upstreams, SoundCloud OAuth sign-in window plus direct `oauth_token` connection fallback, Discord Rich Presence (`ActivityType::Listening` with live timestamps that automatically clears when paused), system tray integration, theme switching, and signed auto-updates via GitHub Releases (`latest.json`).
 
-## Build Requirements
+## Requirements
 
 - Node.js 18+
-- Rust 1.80+
+- Rust 1.90+
 - WebView2 runtime (Windows)
 
-## Development
+## Development & Verification
+
+Install dependencies and build the frontend:
 
 ```bash
 npm install
-npm run dev
+npm run build
 ```
 
-## Production Build
+Run the desktop app in development mode:
+
+```bash
+npx tauri dev
+```
+
+Verify Rust backend compilation, linting, and tests:
+
+```bash
+cargo check --manifest-path src-tauri/Cargo.toml
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path src-tauri/Cargo.toml
+```
+
+## Production & Release
+
+Create a local production installer build:
 
 ```bash
 npm run build
 npx tauri build
 ```
+
+Pushing a version tag (for example `v0.2.0`) triggers [`.github/workflows/release.yml`](.github/workflows/release.yml) to build the Windows NSIS installer, generate cryptographic updater signatures, and publish `latest.json` alongside release artifacts on GitHub Releases.

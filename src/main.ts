@@ -45,6 +45,7 @@ class App {
   private currentViewType: ViewType = 'home';
   private currentState: HistoryState = { view: 'home' };
   private currentViewInstance: ViewComponent | null = null;
+  private lastProxySignature: string = '';
 
   constructor() {
     this.appRoot = document.getElementById('app') as HTMLElement;
@@ -58,13 +59,21 @@ class App {
   private init(): void {
     this.settingsModal = new SettingsModal((updatedSettings) => {
       this.titlebar.updateSettings(updatedSettings);
+      const nextSig = `${updatedSettings.proxy_enabled}|${updatedSettings.proxy_url}|${updatedSettings.proxy_active}`;
+      if (this.lastProxySignature && nextSig !== this.lastProxySignature) {
+        this.lastProxySignature = nextSig;
+        this.accountBar.refreshUser().then(() => {
+          LikesStore.getInstance().init(true).catch(() => {});
+          this.refreshCurrentView();
+        }).catch(() => {});
+      } else {
+        this.lastProxySignature = nextSig;
+      }
     });
 
     this.addToPlaylistModal = new AddToPlaylistModal();
 
     AppNavigator.register({
-      onNavigate: (view, subTab) => this.navigateTo(view, subTab, true),
-      onOpenPlaylist: (playlistId) => this.openPlaylist(playlistId, true),
       onOpenTrack: (trackId) => this.openTrack(trackId, true),
       onOpenProfile: (userId) => this.openProfile(userId, true),
       onOpenAddToPlaylist: (track) => this.addToPlaylistModal.open(track),
@@ -122,6 +131,7 @@ class App {
 
     getSettings()
       .then((settings) => {
+        this.lastProxySignature = `${settings.proxy_enabled}|${settings.proxy_url}|${settings.proxy_active}`;
         if (settings.dark_theme_enabled) {
           document.documentElement.classList.add('sc-dark-theme');
         } else {
@@ -134,7 +144,7 @@ class App {
     LikesStore.getInstance().init().catch(() => {});
 
     onAuthUpdated(async () => {
-      await this.accountBar.refreshUser();
+      await this.accountBar.refreshUser(false);
       await LikesStore.getInstance().init(true);
       this.refreshCurrentView();
     });

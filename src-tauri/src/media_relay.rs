@@ -3,14 +3,16 @@ use futures::StreamExt;
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::RwLock;
 use url::Url;
 
 pub const CHROME_USER_AGENT: &str =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36";
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36";
+
+const MAX_POST_BODY_BYTES: usize = 1024 * 1024;
 
 pub fn generate_session_token() -> String {
     let now = SystemTime::now()
@@ -31,11 +33,16 @@ pub fn generate_session_token() -> String {
     format!("{h1:016x}{h2:016x}")
 }
 
-pub struct MediaRelay {
-    pub local_port: u16,
-    pub session_token: String,
+struct MediaRelayInner {
+    local_port: u16,
+    session_token: String,
     client: Arc<RwLock<reqwest::Client>>,
     settings: Option<Arc<std::sync::RwLock<crate::settings::AppSettings>>>,
+}
+
+pub struct MediaRelay {
+    pub local_port: u16,
+    inner: Arc<MediaRelayInner>,
     abort_handle: tokio::task::AbortHandle,
 }
 
@@ -62,15 +69,24 @@ pub fn determine_content_type(target_url: &str, upstream_ct: &str) -> String {
     let path = lower_url.split('?').next().unwrap_or(&lower_url);
     if path.ends_with(".m3u8") || upstream_ct.contains("mpegurl") || upstream_ct.contains("m3u8") {
         "application/vnd.apple.mpegurl".to_string()
-    } else if path.ends_with(".m4s") || path.ends_with(".mp4") || path.contains("init") || upstream_ct.contains("mp4") {
+    } else if path.ends_with(".m4s")
+        || path.ends_with(".mp4")
+        || path.contains("init")
+        || upstream_ct.contains("mp4")
+    {
         "audio/mp4".to_string()
     } else if path.ends_with(".aac") || upstream_ct.contains("aac") {
         "audio/aac".to_string()
-    } else if path.ends_with(".mp3") || upstream_ct.contains("mpeg") || upstream_ct.contains("mp3") {
+    } else if path.ends_with(".mp3") || upstream_ct.contains("mpeg") || upstream_ct.contains("mp3")
+    {
         "audio/mpeg".to_string()
-    } else if lower_url.contains("/playback/widevine") || lower_url.contains("/playback/playready") {
+    } else if lower_url.contains("/playback/widevine") || lower_url.contains("/playback/playready")
+    {
         "application/octet-stream".to_string()
-    } else if !upstream_ct.is_empty() && upstream_ct != "binary/octet-stream" && upstream_ct != "application/octet-stream" {
+    } else if !upstream_ct.is_empty()
+        && upstream_ct != "binary/octet-stream"
+        && upstream_ct != "application/octet-stream"
+    {
         upstream_ct.to_string()
     } else if lower_url.contains(".m4s") || lower_url.contains(".mp4") {
         "audio/mp4".to_string()
@@ -98,14 +114,14 @@ fn resolve_url(base: &Url, relative_or_absolute: &str) -> String {
     }
 }
 
-fn rewrite_tag_uri(line: &str, base: &Url, relay: &MediaRelay) -> String {
+fn rewrite_tag_uri(line: &str, base: &Url, inner: &MediaRelayInner) -> String {
     if let Some(pos) = line.find("URI=\"") {
         let val_start = pos + 5;
         if let Some(val_len) = line[val_start..].find('"') {
             let uri_val = &line[val_start..val_start + val_len];
             if !uri_val.starts_with("data:") && !uri_val.starts_with("skd:") {
                 let full_uri = resolve_url(base, uri_val);
-                let relay_uri = relay.create_relay_url(&full_uri);
+                let relay_uri = inner.create_relay_url(&full_uri);
                 let mut rewritten = String::with_capacity(line.len() + relay_uri.len());
                 rewritten.push_str(&line[..val_start]);
                 rewritten.push_str(&relay_uri);
@@ -117,63 +133,8 @@ fn rewrite_tag_uri(line: &str, base: &Url, relay: &MediaRelay) -> String {
     line.to_string()
 }
 
-impl MediaRelay {
-    pub async fn start(
-        client: Arc<RwLock<reqwest::Client>>,
-        settings: Option<Arc<std::sync::RwLock<crate::settings::AppSettings>>>,
-    ) -> Result<Arc<Self>, String> {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .map_err(|e| format!("Failed to bind loopback MediaRelay listener: {e}"))?;
-        let local_port = listener
-            .local_addr()
-            .map_err(|e| format!("Failed to get MediaRelay port: {e}"))?
-            .port();
-        let session_token = generate_session_token();
-
-        let (relay_tx, relay_rx) = tokio::sync::oneshot::channel::<Arc<MediaRelay>>();
-
-        let handle = tokio::spawn(async move {
-            let relay_ref = match relay_rx.await {
-                Ok(r) => r,
-                Err(_) => return,
-            };
-            loop {
-                match listener.accept().await {
-                    Ok((socket, _addr)) => {
-                        let r = relay_ref.clone();
-                        tokio::spawn(async move {
-                            r.handle_connection(socket).await;
-                        });
-                    }
-                    Err(e) => {
-                        log::debug!("[MediaRelay] Listener closed or accept error: {e}");
-                        break;
-                    }
-                }
-            }
-        });
-
-        let relay = Arc::new(Self {
-            local_port,
-            session_token: session_token.clone(),
-            client: client.clone(),
-            settings,
-            abort_handle: handle.abort_handle(),
-        });
-
-        let _ = relay_tx.send(relay.clone());
-
-        log::info!("[MediaRelay] Loopback media streaming relay listening on 127.0.0.1:{local_port}");
-        Ok(relay)
-    }
-
-    pub fn shutdown(&self) {
-        self.abort_handle.abort();
-        log::info!("[MediaRelay] Loopback media relay on port {} shut down", self.local_port);
-    }
-
-    pub fn create_relay_url(&self, upstream_url: &str) -> String {
+impl MediaRelayInner {
+    fn create_relay_url(&self, upstream_url: &str) -> String {
         let encoded = BASE64_URL_SAFE_NO_PAD.encode(upstream_url);
         format!(
             "http://127.0.0.1:{}/stream?t={}&u={}",
@@ -185,7 +146,7 @@ impl MediaRelay {
         let mut buffer = [0u8; 4096];
         let mut request_bytes = Vec::new();
 
-        let header_pos = match tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        let header_pos = match tokio::time::timeout(Duration::from_secs(15), async {
             loop {
                 match socket.read(&mut buffer).await {
                     Ok(0) => return None,
@@ -195,14 +156,20 @@ impl MediaRelay {
                             return Some(pos);
                         }
                         if request_bytes.len() > 16384 {
-                            let _ = socket.write_all(b"HTTP/1.1 431 Request Header Fields Too Large\r\nConnection: close\r\n\r\n").await;
+                            let _ = socket
+                                .write_all(
+                                    b"HTTP/1.1 431 Request Header Fields Too Large\r\nConnection: close\r\n\r\n",
+                                )
+                                .await;
                             return None;
                         }
                     }
                     Err(_) => return None,
                 }
             }
-        }).await {
+        })
+        .await
+        {
             Ok(Some(pos)) => pos,
             _ => return,
         };
@@ -210,7 +177,9 @@ impl MediaRelay {
         let request_str = match std::str::from_utf8(&request_bytes[..header_pos]) {
             Ok(s) => s,
             Err(_) => {
-                let _ = socket.write_all(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n").await;
+                let _ = socket
+                    .write_all(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
+                    .await;
                 return;
             }
         };
@@ -263,20 +232,31 @@ impl MediaRelay {
         }
 
         if method != "GET" && method != "HEAD" && method != "POST" {
-            let _ = socket.write_all(b"HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\n").await;
+            let _ = socket
+                .write_all(b"HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\n")
+                .await;
             return;
         }
 
-        // If POST, read the rest of the body if needed
+        if content_length > MAX_POST_BODY_BYTES {
+            let _ = socket
+                .write_all(b"HTTP/1.1 413 Payload Too Large\r\nConnection: close\r\n\r\n")
+                .await;
+            return;
+        }
+
         let mut body_bytes = request_bytes[header_pos + 4..].to_vec();
-        while body_bytes.len() < content_length {
-            match socket.read(&mut buffer).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    body_bytes.extend_from_slice(&buffer[..n]);
+        if content_length > body_bytes.len() {
+            let _ = tokio::time::timeout(Duration::from_secs(15), async {
+                while body_bytes.len() < content_length {
+                    match socket.read(&mut buffer).await {
+                        Ok(0) => break,
+                        Ok(n) => body_bytes.extend_from_slice(&buffer[..n]),
+                        Err(_) => break,
+                    }
                 }
-                Err(_) => break,
-            }
+            })
+            .await;
         }
         if content_length > 0 && body_bytes.len() > content_length {
             body_bytes.truncate(content_length);
@@ -285,7 +265,9 @@ impl MediaRelay {
         let query_str = match uri.split_once('?') {
             Some(("/stream", q)) => q,
             _ => {
-                let _ = socket.write_all(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n").await;
+                let _ = socket
+                    .write_all(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n")
+                    .await;
                 return;
             }
         };
@@ -306,20 +288,32 @@ impl MediaRelay {
         let token = match token_opt {
             Some(t) => t,
             None => {
-                let _ = socket.write_all(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nMissing session token").await;
+                let _ = socket
+                    .write_all(
+                        b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nMissing session token",
+                    )
+                    .await;
                 return;
             }
         };
 
         if token != self.session_token {
-            let _ = socket.write_all(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nInvalid session token").await;
+            let _ = socket
+                .write_all(
+                    b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nInvalid session token",
+                )
+                .await;
             return;
         }
 
         let encoded_url = match url_param_opt {
             Some(u) => u,
             None => {
-                let _ = socket.write_all(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nMissing upstream URL parameter").await;
+                let _ = socket
+                    .write_all(
+                        b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nMissing upstream URL parameter",
+                    )
+                    .await;
                 return;
             }
         };
@@ -327,7 +321,8 @@ impl MediaRelay {
         let target_url_str = match decode_upstream_url(&encoded_url) {
             Ok(u) => u,
             Err(e) => {
-                let err_resp = format!("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n{e}");
+                let err_resp =
+                    format!("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n{e}");
                 let _ = socket.write_all(err_resp.as_bytes()).await;
                 return;
             }
@@ -336,7 +331,9 @@ impl MediaRelay {
         let parsed_target = match Url::parse(&target_url_str) {
             Ok(u) => u,
             Err(e) => {
-                let err_resp = format!("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nInvalid target URL: {e}");
+                let err_resp = format!(
+                    "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nInvalid target URL: {e}"
+                );
                 let _ = socket.write_all(err_resp.as_bytes()).await;
                 return;
             }
@@ -345,7 +342,11 @@ impl MediaRelay {
         let host = parsed_target.host_str().unwrap_or("");
         if !is_allowed_upstream_host(host) {
             log::warn!("[MediaRelay] Blocked request for unapproved host: {host}");
-            let _ = socket.write_all(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nHost not in allowlist").await;
+            let _ = socket
+                .write_all(
+                    b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nHost not in allowlist",
+                )
+                .await;
             return;
         }
 
@@ -373,19 +374,7 @@ impl MediaRelay {
             || parsed_target.path().contains("/widevine")
             || parsed_target.path().contains("/playback/");
 
-        if is_api_host(host) {
-            if let Some(ref auth) = auth_header {
-                req = req.header("Authorization", auth);
-            } else if let Some(ref s_lock) = self.settings
-                && let Ok(s) = s_lock.read()
-                    && let Some(ref token) = s.oauth_token
-                        && !token.is_empty() {
-                            req = req.header("Authorization", format!("OAuth {token}"));
-                        }
-            req = req
-                .header("Origin", "https://soundcloud.com")
-                .header("Referer", "https://soundcloud.com/");
-        } else if is_license_request {
+        if is_api_host(host) || is_license_request {
             req = req
                 .header("Origin", "https://soundcloud.com")
                 .header("Referer", "https://soundcloud.com/");
@@ -393,19 +382,22 @@ impl MediaRelay {
                 req = req.header("Authorization", auth);
             } else if let Some(ref s_lock) = self.settings
                 && let Ok(s) = s_lock.read()
-                    && let Some(ref token) = s.oauth_token
-                        && !token.is_empty() {
-                            req = req.header("Authorization", format!("OAuth {token}"));
-                        }
+                && let Some(ref oauth) = s.oauth_token
+                && !oauth.is_empty()
+            {
+                req = req.header("Authorization", format!("OAuth {oauth}"));
+            }
         }
-        // Do NOT send Authorization or Origin to *.sndcdn.com or *.soundcloud.cloud CDN media segments
+        // Do NOT send Authorization or Origin to *.sndcdn.com or *.soundcloud.cloud CDN media segments.
         req = req.header("User-Agent", CHROME_USER_AGENT);
 
         let upstream_resp = match req.send().await {
             Ok(r) => r,
             Err(e) => {
-                log::warn!("[MediaRelay] Upstream request failed for {}: {e}", host);
-                let err_resp = format!("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\nUpstream proxy fetch failed: {e}");
+                log::warn!("[MediaRelay] Upstream request failed for {host}: {e}");
+                let err_resp = format!(
+                    "HTTP/1.1 502 Bad Gateway\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\nUpstream proxy fetch failed: {e}"
+                );
                 let _ = socket.write_all(err_resp.as_bytes()).await;
                 return;
             }
@@ -414,18 +406,16 @@ impl MediaRelay {
         let status = upstream_resp.status();
         if status == reqwest::StatusCode::PROXY_AUTHENTICATION_REQUIRED {
             log::error!("[MediaRelay] Upstream proxy returned HTTP 407 Proxy Authentication Required");
-            let err_resp = "HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\nProxy authentication failed (HTTP 407 from upstream proxy)";
+            let err_resp = "HTTP/1.1 502 Bad Gateway\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\nProxy authentication failed (HTTP 407 from upstream proxy)";
             let _ = socket.write_all(err_resp.as_bytes()).await;
             return;
         }
         if is_license_request {
             log::info!(
-                "[MediaRelay] Widevine license request to {} (method: {}) -> upstream status: {}",
-                host,
-                method,
-                status
+                "[MediaRelay] Widevine license request to {host} (method: {method}) -> upstream status: {status}"
             );
         }
+
         let upstream_content_type = upstream_resp
             .headers()
             .get("content-type")
@@ -433,15 +423,19 @@ impl MediaRelay {
             .unwrap_or("")
             .to_string();
 
-        let is_m3u8 = upstream_content_type.contains("mpegurl")
-            || upstream_content_type.contains("m3u8")
-            || target_url_str.contains(".m3u8");
+        let lower_ct = upstream_content_type.to_lowercase();
+        let lower_url = target_url_str.to_lowercase();
+        let is_m3u8 = lower_ct.contains("mpegurl")
+            || lower_ct.contains("m3u8")
+            || lower_url.contains(".m3u8");
 
         if method == "GET" && status.is_success() && is_m3u8 {
             let playlist_body = match upstream_resp.text().await {
                 Ok(t) => t,
                 Err(e) => {
-                    let err_resp = format!("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\nFailed to read playlist: {e}");
+                    let err_resp = format!(
+                        "HTTP/1.1 502 Bad Gateway\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\nFailed to read playlist: {e}"
+                    );
                     let _ = socket.write_all(err_resp.as_bytes()).await;
                     return;
                 }
@@ -452,6 +446,8 @@ impl MediaRelay {
                 if line.starts_with("#EXT-X-MAP:")
                     || line.starts_with("#EXT-X-KEY:")
                     || line.starts_with("#EXT-X-SESSION-KEY:")
+                    || line.starts_with("#EXT-X-MEDIA:")
+                    || line.starts_with("#EXT-X-I-FRAME-STREAM-INF:")
                 {
                     rewritten_lines.push(rewrite_tag_uri(line, &parsed_target, self));
                 } else if !line.starts_with('#') && !line.trim().is_empty() {
@@ -506,7 +502,9 @@ impl MediaRelay {
         response_headers.push_str("Access-Control-Allow-Origin: *\r\n");
         response_headers.push_str("Access-Control-Allow-Methods: GET, HEAD, POST, OPTIONS\r\n");
         response_headers.push_str("Access-Control-Allow-Headers: *\r\n");
-        response_headers.push_str("Access-Control-Expose-Headers: Content-Range, Accept-Ranges, Content-Length, Content-Type\r\n");
+        response_headers.push_str(
+            "Access-Control-Expose-Headers: Content-Range, Accept-Ranges, Content-Length, Content-Type\r\n",
+        );
         response_headers.push_str("Access-Control-Allow-Private-Network: true\r\n");
         response_headers.push_str("Connection: close\r\n");
 
@@ -545,6 +543,71 @@ impl MediaRelay {
     }
 }
 
+impl MediaRelay {
+    pub async fn start(
+        client: Arc<RwLock<reqwest::Client>>,
+        settings: Option<Arc<std::sync::RwLock<crate::settings::AppSettings>>>,
+    ) -> Result<Arc<Self>, String> {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .map_err(|e| format!("Failed to bind loopback MediaRelay listener: {e}"))?;
+        let local_port = listener
+            .local_addr()
+            .map_err(|e| format!("Failed to get MediaRelay port: {e}"))?
+            .port();
+        let session_token = generate_session_token();
+
+        let inner = Arc::new(MediaRelayInner {
+            local_port,
+            session_token,
+            client,
+            settings,
+        });
+        let inner_for_loop = inner.clone();
+
+        // Accept loop only holds inner state (never MediaRelay), so Drop always aborts cleanly.
+        let handle = tokio::spawn(async move {
+            loop {
+                match listener.accept().await {
+                    Ok((socket, _addr)) => {
+                        let r = inner_for_loop.clone();
+                        tokio::spawn(async move {
+                            r.handle_connection(socket).await;
+                        });
+                    }
+                    Err(e) => {
+                        log::debug!("[MediaRelay] Listener accept error: {e}");
+                        break;
+                    }
+                }
+            }
+        });
+
+        let relay = Arc::new(Self {
+            local_port,
+            inner,
+            abort_handle: handle.abort_handle(),
+        });
+
+        log::info!(
+            "[MediaRelay] Loopback media streaming relay listening on 127.0.0.1:{local_port}"
+        );
+        Ok(relay)
+    }
+
+    pub fn shutdown(&self) {
+        self.abort_handle.abort();
+        log::info!(
+            "[MediaRelay] Loopback media relay on port {} shut down",
+            self.inner.local_port
+        );
+    }
+
+    pub fn create_relay_url(&self, upstream_url: &str) -> String {
+        self.inner.create_relay_url(upstream_url)
+    }
+}
+
 impl Drop for MediaRelay {
     fn drop(&mut self) {
         self.abort_handle.abort();
@@ -557,34 +620,34 @@ mod tests {
 
     #[tokio::test]
     async fn test_rewrite_tag_uri() {
-        let base = Url::parse("https://playback.media-streaming.soundcloud.cloud/cbcs/track/playlist.m3u8").unwrap();
-        let relay = MediaRelay {
+        let base = Url::parse(
+            "https://playback.media-streaming.soundcloud.cloud/cbcs/track/playlist.m3u8",
+        )
+        .unwrap();
+        let inner = MediaRelayInner {
             local_port: 50000,
             session_token: "testtoken123".to_string(),
             client: Arc::new(RwLock::new(reqwest::Client::new())),
             settings: None,
-            abort_handle: tokio::spawn(async {}).abort_handle(),
         };
 
-        // 1. AES-128 URI should be rewritten
         let aes_line = r#"#EXT-X-KEY:METHOD=AES-128,URI="https://playback.media-streaming.soundcloud.cloud/keys/key1.bin",IV=0x1234"#;
-        let rewritten_aes = rewrite_tag_uri(aes_line, &base, &relay);
+        let rewritten_aes = rewrite_tag_uri(aes_line, &base, &inner);
         assert!(rewritten_aes.contains("http://127.0.0.1:50000/stream?t=testtoken123&u="));
         assert!(rewritten_aes.contains("IV=0x1234"));
 
-        // 2. Apple FairPlay skd:// should be preserved as-is
         let skd_line = r#"#EXT-X-KEY:METHOD=SAMPLE-AES,URI="skd://726bbffaf9b35c949259c11bac3a44c1",KEYFORMAT="com.apple.streamingkeydelivery",KEYFORMATVERSIONS="1""#;
-        let rewritten_skd = rewrite_tag_uri(skd_line, &base, &relay);
-        assert_eq!(rewritten_skd, skd_line);
+        assert_eq!(rewrite_tag_uri(skd_line, &base, &inner), skd_line);
 
-        // 3. Widevine data: URI should be preserved as-is
         let data_line = r#"#EXT-X-KEY:METHOD=SAMPLE-AES,URI="data:text/plain;base64,AAAAa3Bzc2g=",KEYFORMAT="urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed""#;
-        let rewritten_data = rewrite_tag_uri(data_line, &base, &relay);
-        assert_eq!(rewritten_data, data_line);
+        assert_eq!(rewrite_tag_uri(data_line, &base, &inner), data_line);
 
-        // 4. MAP URI should be rewritten
         let map_line = r#"#EXT-X-MAP:URI="init.mp4""#;
-        let rewritten_map = rewrite_tag_uri(map_line, &base, &relay);
+        let rewritten_map = rewrite_tag_uri(map_line, &base, &inner);
         assert!(rewritten_map.starts_with(r#"#EXT-X-MAP:URI="http://127.0.0.1:50000/stream?t=testtoken123&u="#));
+
+        let media_line = r#"#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="HQ",URI="audio_hq.m3u8""#;
+        let rewritten_media = rewrite_tag_uri(media_line, &base, &inner);
+        assert!(rewritten_media.contains(r#"URI="http://127.0.0.1:50000/stream?t=testtoken123&u="#));
     }
 }

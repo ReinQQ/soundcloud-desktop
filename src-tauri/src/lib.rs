@@ -7,13 +7,12 @@ pub mod soundcloud;
 
 use commands::{
     check_update, clear_discord_rpc, get_discord_rpc_status, get_settings, install_update,
-    log_frontend_error, restart_app, save_settings, sc_add_track_to_playlist,
-    sc_clear_stream_cache, sc_create_playlist, sc_frontend_ready, sc_get_discover,
-    sc_get_library, sc_get_me, sc_get_playlist, sc_get_stream, sc_get_track,
-    sc_get_track_comments, sc_get_track_detail, sc_get_user_profile, sc_get_user_tracks,
-    sc_login, sc_login_with_token, sc_logout, sc_post_track_comment, sc_resolve_stream,
-    sc_search, sc_toggle_follow, sc_toggle_like, sc_update_profile, sc_upload_profile_image,
-    test_proxy, update_discord_rpc, window_action,
+    log_frontend_error, save_settings, sc_add_track_to_playlist, sc_clear_stream_cache,
+    sc_create_playlist, sc_frontend_ready, sc_get_discover, sc_get_library, sc_get_me,
+    sc_get_playlist, sc_get_stream, sc_get_track_comments, sc_get_track_detail,
+    sc_get_user_profile, sc_get_user_tracks, sc_login, sc_login_with_token, sc_logout,
+    sc_post_track_comment, sc_resolve_stream, sc_search, sc_toggle_follow, sc_toggle_like,
+    sc_update_profile, sc_upload_profile_image, test_proxy, update_discord_rpc, window_action,
 };
 use discord_rpc::DiscordRpcHandle;
 use settings::AppSettings;
@@ -22,7 +21,7 @@ use std::sync::{Arc, RwLock};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
+    Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -31,9 +30,23 @@ pub struct WebviewProxyEndpoint(pub Arc<std::sync::RwLock<Option<String>>>);
 #[derive(Clone)]
 pub struct ProxyBridgeState(pub Arc<tokio::sync::RwLock<Option<Arc<proxy_bridge::ProxyBridge>>>>);
 
+fn shutdown_network_services(app: &tauri::AppHandle) {
+    if let Some(bridge_state) = app.try_state::<ProxyBridgeState>() {
+        tauri::async_runtime::block_on(async {
+            let mut bridge = bridge_state.0.write().await;
+            if let Some(b) = bridge.take() {
+                b.shutdown();
+            }
+        });
+    }
+    if let Some(client) = app.try_state::<SoundCloudClient>() {
+        tauri::async_runtime::block_on(client.shutdown());
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.show();
@@ -63,10 +76,7 @@ pub fn run() {
             let mut proxy_bridge_handle: Option<Arc<proxy_bridge::ProxyBridge>> = None;
             let mut is_proxy_active = false;
 
-            let rpc_handle = DiscordRpcHandle::new(
-                initial_settings.discord_app_id.clone(),
-                initial_settings.discord_rpc_enabled,
-            );
+            let rpc_handle = DiscordRpcHandle::new(initial_settings.discord_rpc_enabled);
             app.manage(rpc_handle);
 
             let webview2_dir = app.path().app_local_data_dir().ok().map(|d| {
@@ -79,7 +89,8 @@ pub fn run() {
             let browser_args: Vec<String> = vec![
                 "--disable-popup-blocking".to_string(),
                 "--disable-blink-features=AutomationControlled".to_string(),
-                "--unsafely-treat-insecure-origin-as-secure=http://localhost:5173,http://127.0.0.1".to_string(),
+                "--unsafely-treat-insecure-origin-as-secure=http://localhost:5173,http://127.0.0.1"
+                    .to_string(),
                 "--enable-features=WidevineCdms".to_string(),
                 "--disable-features=AutofillServerCommunication".to_string(),
             ];
@@ -89,22 +100,18 @@ pub fn run() {
             if initial_settings.proxy_enabled {
                 match settings::validate_proxy_url(&initial_settings.proxy_url) {
                     Ok(parsed_url) => {
-                        if proxy_bridge::needs_proxy_bridge(&parsed_url) {
-                            match tauri::async_runtime::block_on(proxy_bridge::ProxyBridge::start(parsed_url.clone())) {
-                                Ok(bridge) => {
-                                    let proxy_server = bridge.local_http_str();
-                                    webview_proxy_endpoint = Some(proxy_server);
-                                    proxy_bridge_handle = Some(bridge);
-                                    is_proxy_active = true;
-                                }
-                                Err(e) => {
-                                    log::warn!("Failed to start proxy bridge: {e}");
-                                }
+                        match tauri::async_runtime::block_on(proxy_bridge::ProxyBridge::start(
+                            parsed_url,
+                        )) {
+                            Ok(bridge) => {
+                                let proxy_server = bridge.local_http_str();
+                                webview_proxy_endpoint = Some(proxy_server);
+                                proxy_bridge_handle = Some(bridge);
+                                is_proxy_active = true;
                             }
-                        } else {
-                            let proxy_str = parsed_url.as_str().trim_end_matches('/');
-                            webview_proxy_endpoint = Some(proxy_str.to_string());
-                            is_proxy_active = true;
+                            Err(e) => {
+                                log::warn!("Failed to start proxy bridge: {e}");
+                            }
                         }
                     }
                     Err(e) => {
@@ -121,20 +128,31 @@ pub fn run() {
             initial_settings.proxy_active = is_proxy_active;
             let settings_state = Arc::new(RwLock::new(initial_settings.clone()));
             app.manage(settings_state.clone());
-            app.manage(WebviewProxyEndpoint(Arc::new(std::sync::RwLock::new(webview_proxy_endpoint))));
-            app.manage(ProxyBridgeState(Arc::new(tokio::sync::RwLock::new(proxy_bridge_handle))));
+            app.manage(WebviewProxyEndpoint(Arc::new(std::sync::RwLock::new(
+                webview_proxy_endpoint,
+            ))));
+            app.manage(ProxyBridgeState(Arc::new(tokio::sync::RwLock::new(
+                proxy_bridge_handle,
+            ))));
 
-            let raw_client = soundcloud::build_http_client(initial_settings.proxy_enabled, &initial_settings.proxy_url)
-                .unwrap_or_else(|e| {
-                    log::error!("Failed to build initial proxy client: {e}");
-                    reqwest::Client::builder()
-                        .user_agent(soundcloud::CHROME_USER_AGENT)
-                        .timeout(std::time::Duration::from_secs(20))
-                        .build()
-                        .unwrap_or_default()
-                });
+            let raw_client = soundcloud::build_http_client(
+                initial_settings.proxy_enabled && is_proxy_active,
+                &initial_settings.proxy_url,
+            )
+            .unwrap_or_else(|e| {
+                log::error!("Failed to build initial HTTP client: {e}");
+                reqwest::Client::builder()
+                    .user_agent(soundcloud::CHROME_USER_AGENT)
+                    .connect_timeout(std::time::Duration::from_secs(15))
+                    .read_timeout(std::time::Duration::from_secs(30))
+                    .build()
+                    .unwrap_or_default()
+            });
             let client_arc = Arc::new(tokio::sync::RwLock::new(raw_client));
-            let media_relay_instance = tauri::async_runtime::block_on(media_relay::MediaRelay::start(client_arc.clone(), Some(settings_state.clone()))).ok();
+            let media_relay_instance = tauri::async_runtime::block_on(
+                media_relay::MediaRelay::start(client_arc.clone(), Some(settings_state.clone())),
+            )
+            .ok();
 
             let sc_client = SoundCloudClient::new(
                 app.handle().clone(),
@@ -151,7 +169,9 @@ pub fn run() {
                 WebviewUrl::App("index.html".into()),
             )
             .title("SoundCloud")
-            .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/128x128@2x.png"))?)?
+            .icon(tauri::image::Image::from_bytes(include_bytes!(
+                "../icons/128x128@2x.png"
+            ))?)?
             .user_agent(soundcloud::CHROME_USER_AGENT)
             .inner_size(1280.0, 800.0)
             .min_inner_size(860.0, 540.0)
@@ -164,10 +184,6 @@ pub fn run() {
             #[cfg(windows)]
             {
                 window_builder = window_builder.additional_browser_args(&browser_args_str);
-            }
-            #[cfg(not(windows))]
-            if let Some(ref url) = non_windows_proxy_url {
-                window_builder = window_builder.proxy_url(url.clone());
             }
 
             let window = window_builder.build()?;
@@ -191,7 +207,8 @@ pub fn run() {
                 MenuItem::with_id(app, "toggle_window", "Show / Hide", true, None::<&str>)?;
             let play_pause_item =
                 MenuItem::with_id(app, "play_pause", "Play / Pause", true, None::<&str>)?;
-            let next_item = MenuItem::with_id(app, "next_track", "Next Track", true, None::<&str>)?;
+            let next_item =
+                MenuItem::with_id(app, "next_track", "Next Track", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
 
             let tray_menu = Menu::with_items(
@@ -199,13 +216,13 @@ pub fn run() {
                 &[&toggle_item, &play_pause_item, &next_item, &quit_item],
             )?;
 
-            let mut tray_builder = TrayIconBuilder::new()
+            let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
+            let tray_builder = TrayIconBuilder::new()
+                .icon(tray_icon)
+                .icon_as_template(false)
+                .tooltip("SoundCloud Desktop")
                 .menu(&tray_menu)
                 .show_menu_on_left_click(false);
-
-            if let Some(icon) = app.default_window_icon() {
-                tray_builder = tray_builder.icon(icon.clone());
-            }
 
             let _tray = tray_builder
                 .on_menu_event(|app, event| match event.id().as_ref() {
@@ -277,7 +294,6 @@ pub fn run() {
             clear_discord_rpc,
             get_discord_rpc_status,
             window_action,
-            restart_app,
             check_update,
             install_update,
             sc_get_discover,
@@ -285,7 +301,6 @@ pub fn run() {
             sc_search,
             sc_get_library,
             sc_get_playlist,
-            sc_get_track,
             sc_toggle_like,
             sc_resolve_stream,
             sc_clear_stream_cache,
@@ -307,7 +322,12 @@ pub fn run() {
             log_frontend_error,
             sc_frontend_ready,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running soundcloud-desktop application");
-}
+        .build(tauri::generate_context!())
+        .expect("error while building soundcloud-desktop application");
 
+    app.run(|app_handle, event| {
+        if let RunEvent::Exit = event {
+            shutdown_network_services(app_handle);
+        }
+    });
+}

@@ -29,11 +29,6 @@ description = "Enables window_action command"
 commands.allow = ["window_action"]
 
 [[permission]]
-identifier = "allow-restart-app"
-description = "Enables restart_app command"
-commands.allow = ["restart_app"]
-
-[[permission]]
 identifier = "allow-check-update"
 description = "Enables check_update command"
 commands.allow = ["check_update"]
@@ -67,11 +62,6 @@ commands.allow = ["sc_get_library"]
 identifier = "allow-sc-get-playlist"
 description = "Enables sc_get_playlist command"
 commands.allow = ["sc_get_playlist"]
-
-[[permission]]
-identifier = "allow-sc-get-track"
-description = "Enables sc_get_track command"
-commands.allow = ["sc_get_track"]
 
 [[permission]]
 identifier = "allow-sc-toggle-like"

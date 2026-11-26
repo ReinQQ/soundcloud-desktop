@@ -15,7 +15,6 @@ export class PlayerDock {
   private engine: AudioEngine;
   private likesStore: LikesStore;
   private onToggleQueue: () => void;
-  private unsubscribeLikes: () => void;
 
   private isDraggingScrubber: boolean = false;
   private volumePopupOpen: boolean = false;
@@ -38,7 +37,7 @@ export class PlayerDock {
       this.updateState();
     });
 
-    this.unsubscribeLikes = this.likesStore.subscribe(() => {
+    this.likesStore.subscribe(() => {
       this.updateLikeIcon();
     });
 

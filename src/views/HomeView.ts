@@ -24,6 +24,7 @@ export class HomeView {
   private engine: AudioEngine;
   private onOpenPlaylist: (id: number | string) => void;
   private unsubscribeAudio: (() => void) | null = null;
+  private destroyed: boolean = false;
 
   constructor(onOpenPlaylist: (id: number | string) => void) {
     this.engine = AudioEngine.getInstance();
@@ -40,6 +41,7 @@ export class HomeView {
   }
 
   public destroy(): void {
+    this.destroyed = true;
     if (this.unsubscribeAudio) {
       this.unsubscribeAudio();
       this.unsubscribeAudio = null;
@@ -82,8 +84,10 @@ export class HomeView {
 
     try {
       const data = await scGetDiscover();
+      if (this.destroyed) return;
       this.render(data);
     } catch (err) {
+      if (this.destroyed) return;
       this.element.innerHTML = `
         <div style="padding: 24px; color: var(--text-secondary);">
           <h3>Could not load recommendations</h3>
@@ -200,6 +204,7 @@ export class HomeView {
                 let tracks: Track[] = [];
                 if (collectionKey) {
                   const pl = await scGetPlaylist(collectionKey);
+                  if (this.destroyed) return;
                   tracks = (pl.tracks || []).filter((t: Track) => t && t.title);
                 } else if (Array.isArray(item.tracks) && item.tracks.length > 0) {
                   tracks = item.tracks.filter((t: Track) => t && t.title);
@@ -212,10 +217,13 @@ export class HomeView {
                   showToast('No playable tracks found in this playlist');
                 }
               } catch (err) {
+                if (this.destroyed) return;
                 console.error('Failed to load playlist for playback:', err);
                 showToast('Could not load playlist tracks');
               } finally {
-                this.updatePlayButtons();
+                if (!this.destroyed) {
+                  this.updatePlayButtons();
+                }
               }
             }
           }

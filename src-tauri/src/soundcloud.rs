@@ -40,38 +40,63 @@ pub struct SoundCloudClient {
     in_flight: InFlightMap,
 }
 
+#[derive(Debug, Clone)]
+pub enum GetMeError {
+    Unauthorized(String),
+    Recoverable(String),
+}
+
+impl std::fmt::Display for GetMeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unauthorized(msg) | Self::Recoverable(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
 pub fn build_http_client(proxy_enabled: bool, proxy_url: &str) -> Result<reqwest::Client, String> {
+    // Use connect/read timeouts instead of a short total timeout so MediaRelay audio streaming never aborts mid-track.
     let mut builder = reqwest::Client::builder()
         .user_agent(CHROME_USER_AGENT)
-        .timeout(Duration::from_secs(20));
+        .connect_timeout(Duration::from_secs(15))
+        .read_timeout(Duration::from_secs(30));
 
     if proxy_enabled {
         let parsed = crate::settings::validate_proxy_url(proxy_url)?;
         let scheme = parsed.scheme().to_lowercase();
-        let user = parsed.username();
-        let pass = parsed.password().unwrap_or("");
+        let creds = crate::settings::parse_proxy_credentials(&parsed);
 
-        let target_url = if scheme == "socks5" {
-            let mut u = parsed.clone();
-            let _ = u.set_scheme("socks5h");
-            u
-        } else {
-            parsed.clone()
-        };
+        let mut target_url = parsed.clone();
+        if scheme == "socks5" {
+            let _ = target_url.set_scheme("socks5h");
+        } else if scheme == "socks4" {
+            let _ = target_url.set_scheme("socks4a");
+        }
+        let _ = target_url.set_username("");
+        let _ = target_url.set_password(None);
 
         let proxy_str = target_url.as_str().trim_end_matches('/');
-        let mut proxy = reqwest::Proxy::all(proxy_str)
-            .map_err(|e| format!("Failed to configure proxy with {}: {e}", crate::settings::redact_proxy_url(proxy_str)))?;
+        let mut proxy = reqwest::Proxy::all(proxy_str).map_err(|e| {
+            format!(
+                "Failed to configure proxy with {}: {e}",
+                crate::settings::redact_proxy_url(proxy_url)
+            )
+        })?;
 
-        if !user.is_empty() || !pass.is_empty() {
-            proxy = proxy.basic_auth(user, pass);
+        if let Some((user, pass)) = creds {
+            proxy = proxy.basic_auth(&user, &pass);
         }
 
         builder = builder.proxy(proxy);
-        log::info!("SoundCloudClient configured with proxy: {}", crate::settings::redact_proxy_url(proxy_str));
+        log::info!(
+            "SoundCloudClient configured with proxy: {}",
+            crate::settings::redact_proxy_url(proxy_url)
+        );
     }
 
-    builder.build().map_err(|e| format!("Failed to build reqwest client: {e}"))
+    builder
+        .build()
+        .map_err(|e| format!("Failed to build reqwest client: {e}"))
 }
 
 fn extract_script_urls(html: &str) -> Vec<String> {
@@ -182,15 +207,25 @@ impl SoundCloudClient {
         self.client.read().await.clone()
     }
 
-    #[allow(dead_code)]
-    pub async fn set_media_relay(&self, relay: Option<Arc<MediaRelay>>) {
+    pub async fn ensure_media_relay(&self) -> Result<Arc<MediaRelay>, String> {
+        {
+            let guard = self.media_relay.read().await;
+            if let Some(ref relay) = *guard {
+                return Ok(relay.clone());
+            }
+        }
         let mut guard = self.media_relay.write().await;
-        *guard = relay;
+        if let Some(ref relay) = *guard {
+            return Ok(relay.clone());
+        }
+        let started = MediaRelay::start(self.client.clone(), Some(self.settings.clone())).await?;
+        *guard = Some(started.clone());
+        Ok(started)
     }
 
     pub async fn shutdown(&self) {
-        let guard = self.media_relay.read().await;
-        if let Some(ref relay) = *guard {
+        let mut guard = self.media_relay.write().await;
+        if let Some(relay) = guard.take() {
             relay.shutdown();
         }
     }
@@ -200,6 +235,11 @@ impl SoundCloudClient {
         {
             let mut guard = self.client.write().await;
             *guard = new_client;
+        }
+        if proxy_enabled
+            && let Err(e) = self.ensure_media_relay().await
+        {
+            log::warn!("Failed to ensure MediaRelay after client rebuild: {e}");
         }
         self.clear_all_caches();
         log::info!(
@@ -225,49 +265,6 @@ impl SoundCloudClient {
         if let Ok(mut guard) = self.response_cache.write() {
             guard.clear();
         }
-    }
-
-    #[allow(dead_code)]
-    pub async fn get_exit_ip_and_country(&self) -> Result<(String, String), String> {
-        let client = self.client().await;
-        let resp = client
-            .get("http://ip-api.com/json")
-            .timeout(Duration::from_secs(10))
-            .send()
-            .await
-            .map_err(|e| {
-                if let Some(status) = e.status()
-                    && status == reqwest::StatusCode::PROXY_AUTHENTICATION_REQUIRED {
-                        return "Proxy authentication failed (HTTP 407)".to_string();
-                    }
-                format!("Failed to connect via proxy: {e}")
-            })?;
-
-        let status = resp.status();
-        if status == reqwest::StatusCode::PROXY_AUTHENTICATION_REQUIRED {
-            return Err("Proxy authentication failed (HTTP 407)".to_string());
-        }
-        if !status.is_success() {
-            return Err(format!("IP check service returned HTTP {status}"));
-        }
-
-        let json = resp
-            .json::<serde_json::Value>()
-            .await
-            .map_err(|e| format!("Failed to parse IP json: {e}"))?;
-
-        let ip = json
-            .get("query")
-            .and_then(|q| q.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-        let country = json
-            .get("country")
-            .and_then(|c| c.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-
-        Ok((ip, country))
     }
 
     pub fn clear_user_cache(&self) {
@@ -343,10 +340,10 @@ impl SoundCloudClient {
         }
     }
 
-    pub async fn extract_client_id(&self) -> Result<String, String> {
-        let client = self.client().await;
+    async fn extract_client_id_with_http(client: &reqwest::Client) -> Result<String, String> {
         let html = client
             .get("https://soundcloud.com")
+            .timeout(Duration::from_secs(20))
             .send()
             .await
             .map_err(|e| format!("Failed to fetch soundcloud.com: {e}"))?
@@ -369,22 +366,33 @@ impl SoundCloudClient {
         unique_urls.reverse();
 
         for script_url in unique_urls {
-            if let Ok(resp) = client.get(&script_url).send().await
+            if let Ok(resp) = client
+                .get(&script_url)
+                .timeout(Duration::from_secs(15))
+                .send()
+                .await
                 && let Ok(js) = resp.text().await
-                    && let Some(client_id) = extract_client_id_from_js(&js) {
-                        if let Ok(mut guard) = self.cached_client_id.write() {
-                            *guard = Some(client_id.clone());
-                        }
-                        if let Ok(mut lock) = self.settings.write() {
-                            lock.cached_client_id = Some(client_id.clone());
-                            let _ = lock.save(&self.app_handle);
-                        }
-                        log::info!("Extracted SoundCloud client_id: {client_id}");
-                        return Ok(client_id);
-                    }
+                && let Some(client_id) = extract_client_id_from_js(&js)
+            {
+                return Ok(client_id);
+            }
         }
 
         Err("Could not find client_id in asset scripts".to_string())
+    }
+
+    pub async fn extract_client_id(&self) -> Result<String, String> {
+        let client = self.client().await;
+        let client_id = Self::extract_client_id_with_http(&client).await?;
+        if let Ok(mut guard) = self.cached_client_id.write() {
+            *guard = Some(client_id.clone());
+        }
+        if let Ok(mut lock) = self.settings.write() {
+            lock.cached_client_id = Some(client_id.clone());
+            let _ = lock.save(&self.app_handle);
+        }
+        log::info!("Extracted SoundCloud client_id: {client_id}");
+        Ok(client_id)
     }
 
     pub async fn refresh_client_id(&self) -> Result<String, String> {
@@ -426,10 +434,25 @@ impl SoundCloudClient {
             let _ = existing.destroy();
         }
 
-        let webview_proxy = self
-            .app_handle
-            .try_state::<crate::WebviewProxyEndpoint>()
-            .and_then(|s| s.0.read().ok().and_then(|g| g.clone()));
+        let proxy_enabled = self.settings.read().map(|s| s.proxy_enabled).unwrap_or(false);
+        let webview_proxy = if proxy_enabled {
+            let mut ep = None;
+            if let Some(bridge_state) = self.app_handle.try_state::<crate::ProxyBridgeState>() {
+                let guard = bridge_state.0.read().await;
+                if let Some(ref bridge) = *guard {
+                    ep = Some(bridge.local_http_str());
+                }
+            }
+            if ep.is_none() {
+                ep = self
+                    .app_handle
+                    .try_state::<crate::WebviewProxyEndpoint>()
+                    .and_then(|s| s.0.read().ok().and_then(|g| g.clone()));
+            }
+            ep
+        } else {
+            None
+        };
 
         #[cfg(windows)]
         let mut browser_args: Vec<String> = vec![
@@ -454,12 +477,17 @@ impl SoundCloudClient {
             }
         }
 
+        // Isolated data directory so WebView2 honors --proxy-server independently of the main window.
         let webview2_dir = self
             .app_handle
             .path()
             .app_local_data_dir()
             .ok()
-            .map(|d| d.join("webview2"));
+            .map(|d| {
+                let dir = d.join("webview2_dd");
+                let _ = std::fs::create_dir_all(&dir);
+                dir
+            });
 
         let sc_login_url = "https://soundcloud.com"
             .parse::<url::Url>()
@@ -590,7 +618,9 @@ impl SoundCloudClient {
         let client = self.client().await;
 
         for attempt in 0..2 {
-            let mut req = client.request(method.clone(), endpoint);
+            let mut req = client
+                .request(method.clone(), endpoint)
+                .timeout(Duration::from_secs(20));
             if !endpoint.contains("client_id=") {
                 req = req.query(&[("client_id", client_id.as_str())]);
             }
@@ -1428,7 +1458,10 @@ impl SoundCloudClient {
                     .and_then(|m| m.as_str())
                     .unwrap_or("audio/mpeg");
 
-                let mut req = client.get(url).query(&[("client_id", &client_id)]);
+                let mut req = client
+                    .get(url)
+                    .timeout(Duration::from_secs(20))
+                    .query(&[("client_id", &client_id)]);
                 if !track_auth.is_empty() {
                     req = req.query(&[("track_authorization", track_auth)]);
                 }
@@ -1449,7 +1482,10 @@ impl SoundCloudClient {
                         if let Ok(new_id) = self.refresh_client_id().await {
                             client_id = new_id;
                             client_id_refreshed = true;
-                            let mut retry_req = client.get(url).query(&[("client_id", &client_id)]);
+                            let mut retry_req = client
+                                .get(url)
+                                .timeout(Duration::from_secs(20))
+                                .query(&[("client_id", &client_id)]);
                             if !track_auth.is_empty() {
                                 retry_req = retry_req.query(&[("track_authorization", track_auth)]);
                             }
@@ -1482,12 +1518,16 @@ impl SoundCloudClient {
                                     .map(|s| s.to_string());
 
                                 let proxy_enabled = self.settings.read().map(|s| s.proxy_enabled).unwrap_or(false);
-                                let final_stream_url = if proxy_enabled {
-                                    if let Some(ref relay) = *self.media_relay.read().await {
-                                        relay.create_relay_url(stream_url)
-                                    } else {
-                                        stream_url.to_string()
-                                    }
+                                let relay_opt = if proxy_enabled {
+                                    Some(self.ensure_media_relay().await.map_err(|e| {
+                                        format!("Proxy relay error: failed to start MediaRelay: {e}")
+                                    })?)
+                                } else {
+                                    None
+                                };
+
+                                let final_stream_url = if let Some(ref relay) = relay_opt {
+                                    relay.create_relay_url(stream_url)
                                 } else {
                                     stream_url.to_string()
                                 };
@@ -1495,12 +1535,8 @@ impl SoundCloudClient {
                                 let final_license_url = if is_encrypted {
                                     if let Some(ref token) = license_auth_token {
                                         let raw_lic = format!("https://license.media-streaming.soundcloud.cloud/playback/widevine?license_token={token}");
-                                        if proxy_enabled {
-                                            if let Some(ref relay) = *self.media_relay.read().await {
-                                                Some(relay.create_relay_url(&raw_lic))
-                                            } else {
-                                                Some(raw_lic)
-                                            }
+                                        if let Some(ref relay) = relay_opt {
+                                            Some(relay.create_relay_url(&raw_lic))
                                         } else {
                                             Some(raw_lic)
                                         }
@@ -1677,24 +1713,232 @@ impl SoundCloudClient {
         }
     }
 
-    pub async fn get_me(&self, oauth_token: &str) -> Result<serde_json::Value, String> {
-        let resp = self
-            .execute_api_request(
-                reqwest::Method::GET,
-                "https://api-v2.soundcloud.com/me",
-                &[],
-                None,
-                Some(oauth_token),
-            )
-            .await?;
+    pub async fn get_me_checked(&self, oauth_token: &str) -> Result<serde_json::Value, GetMeError> {
+        let client = self.client().await;
+        let mut client_id = self.get_client_id().await;
 
-        if !resp.status().is_success() {
-            return Err(format!("Get me failed with status: {}", resp.status()));
+        for attempt in 0..2 {
+            let req = client
+                .get("https://api-v2.soundcloud.com/me")
+                .timeout(Duration::from_secs(20))
+                .query(&[("client_id", client_id.as_str())]);
+            let req = self.apply_browser_headers(req, Some(oauth_token));
+
+            let resp = req
+                .send()
+                .await
+                .map_err(|e| GetMeError::Recoverable(format!("SoundCloud API network error: {e}")))?;
+
+            let status = resp.status();
+            if status.is_success() {
+                return resp.json().await.map_err(|e| {
+                    GetMeError::Recoverable(format!("Failed to parse user profile: {e}"))
+                });
+            }
+
+            if status == reqwest::StatusCode::PROXY_AUTHENTICATION_REQUIRED {
+                return Err(GetMeError::Recoverable(
+                    "Proxy authentication failed (HTTP 407)".to_string(),
+                ));
+            }
+
+            let body = resp.text().await.unwrap_or_default();
+            let lower_body = body.to_lowercase();
+            let is_datadome = lower_body.contains("geo.captcha-delivery.com")
+                || lower_body.contains("datadome");
+
+            if is_datadome || status == reqwest::StatusCode::FORBIDDEN {
+                return Err(GetMeError::Recoverable(format!(
+                    "SoundCloud verification/access check ({status})"
+                )));
+            }
+
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
+                return Err(GetMeError::Recoverable(format!(
+                    "SoundCloud temporary error ({status})"
+                )));
+            }
+
+            if status == reqwest::StatusCode::UNAUTHORIZED {
+                if attempt == 0 {
+                    // Confirm 401 is not caused by a stale client_id before invalidating oauth_token.
+                    match self.refresh_client_id().await {
+                        Ok(new_id) => {
+                            client_id = new_id;
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(GetMeError::Recoverable(format!(
+                                "Could not verify session (client_id refresh failed): {e}"
+                            )));
+                        }
+                    }
+                }
+                return Err(GetMeError::Unauthorized(
+                    "SoundCloud session expired (HTTP 401 Unauthorized)".to_string(),
+                ));
+            }
+
+            return Err(GetMeError::Recoverable(format!(
+                "Get me failed with status: {status}"
+            )));
         }
 
-        resp.json()
+        Err(GetMeError::Recoverable(
+            "SoundCloud session check failed after retry".to_string(),
+        ))
+    }
+
+    pub async fn get_me(&self, oauth_token: &str) -> Result<serde_json::Value, String> {
+        self.get_me_checked(oauth_token)
             .await
-            .map_err(|e| format!("Failed to parse user profile: {e}"))
+            .map_err(|e| e.to_string())
+    }
+
+    pub async fn resolve_stream_for_proxy_test(
+        &self,
+        test_client: &reqwest::Client,
+    ) -> Result<(String, String), String> {
+        let mut client_id = match Self::extract_client_id_with_http(test_client).await {
+            Ok(id) => id,
+            Err(_) => {
+                if let Ok(guard) = self.cached_client_id.read()
+                    && let Some(ref id) = *guard
+                    && !id.is_empty()
+                {
+                    id.clone()
+                } else {
+                    FALLBACK_CLIENT_ID.to_string()
+                }
+            }
+        };
+
+        let fetch_track = |http: &reqwest::Client, cid: &str| {
+            let req = http
+                .get("https://api-v2.soundcloud.com/tracks/2401939686")
+                .timeout(Duration::from_secs(15))
+                .query(&[("client_id", cid)])
+                .header(reqwest::header::USER_AGENT, CHROME_USER_AGENT)
+                .header(reqwest::header::ORIGIN, "https://soundcloud.com")
+                .header(reqwest::header::REFERER, "https://soundcloud.com/");
+            req.send()
+        };
+
+        let mut track_resp = fetch_track(test_client, &client_id)
+            .await
+            .map_err(|e| format!("SoundCloud API unreachable via proxy: {e}"))?;
+
+        if track_resp.status() == reqwest::StatusCode::PROXY_AUTHENTICATION_REQUIRED {
+            return Err("Proxy authentication failed (HTTP 407)".to_string());
+        }
+
+        if matches!(
+            track_resp.status(),
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        ) && let Ok(fresh_id) = Self::extract_client_id_with_http(test_client).await
+        {
+            client_id = fresh_id;
+            track_resp = fetch_track(test_client, &client_id)
+                .await
+                .map_err(|e| format!("SoundCloud API retry failed via proxy: {e}"))?;
+        }
+
+        let track_json: serde_json::Value = if track_resp.status().is_success() {
+            track_resp
+                .json()
+                .await
+                .map_err(|e| format!("Failed to parse SoundCloud track JSON: {e}"))?
+        } else if track_resp.status() == reqwest::StatusCode::NOT_FOUND {
+            let search_resp = test_client
+                .get("https://api-v2.soundcloud.com/search/tracks")
+                .timeout(Duration::from_secs(15))
+                .query(&[("q", "lofi"), ("limit", "5"), ("client_id", client_id.as_str())])
+                .header(reqwest::header::USER_AGENT, CHROME_USER_AGENT)
+                .header(reqwest::header::ORIGIN, "https://soundcloud.com")
+                .header(reqwest::header::REFERER, "https://soundcloud.com/")
+                .send()
+                .await
+                .map_err(|e| format!("SoundCloud search failed via proxy: {e}"))?;
+            if !search_resp.status().is_success() {
+                return Err(format!(
+                    "SoundCloud API returned HTTP {}",
+                    search_resp.status()
+                ));
+            }
+            let search_json: serde_json::Value = search_resp
+                .json()
+                .await
+                .map_err(|e| format!("Failed to parse search response: {e}"))?;
+            search_json
+                .get("collection")
+                .and_then(|c| c.as_array())
+                .and_then(|arr| {
+                    arr.iter().find(|t| {
+                        t.get("media")
+                            .and_then(|m| m.get("transcodings"))
+                            .and_then(|tc| tc.as_array())
+                            .is_some_and(|a| !a.is_empty())
+                    })
+                })
+                .cloned()
+                .ok_or_else(|| "No playable test track returned by SoundCloud API".to_string())?
+        } else {
+            return Err(format!(
+                "SoundCloud API returned HTTP {}",
+                track_resp.status()
+            ));
+        };
+
+        let transcodings = track_json
+            .get("media")
+            .and_then(|m| m.get("transcodings"))
+            .and_then(|t| t.as_array())
+            .filter(|t| !t.is_empty())
+            .ok_or_else(|| "Test track has no media transcodings".to_string())?;
+
+        let track_auth = track_json
+            .get("track_authorization")
+            .and_then(|a| a.as_str())
+            .unwrap_or("");
+
+        for tc in transcodings {
+            let protocol = tc
+                .get("format")
+                .and_then(|f| f.get("protocol"))
+                .and_then(|p| p.as_str())
+                .unwrap_or("unknown");
+            if protocol.contains("encrypted") {
+                continue;
+            }
+            let Some(tc_url) = tc.get("url").and_then(|u| u.as_str()) else {
+                continue;
+            };
+            let mut req = test_client
+                .get(tc_url)
+                .timeout(Duration::from_secs(15))
+                .query(&[("client_id", client_id.as_str())])
+                .header(reqwest::header::USER_AGENT, CHROME_USER_AGENT)
+                .header(reqwest::header::ORIGIN, "https://soundcloud.com")
+                .header(reqwest::header::REFERER, "https://soundcloud.com/");
+            if !track_auth.is_empty() {
+                req = req.query(&[("track_authorization", track_auth)]);
+            }
+            let resp = req
+                .send()
+                .await
+                .map_err(|e| format!("Transcoding resolve failed via proxy: {e}"))?;
+            if resp.status() == reqwest::StatusCode::PROXY_AUTHENTICATION_REQUIRED {
+                return Err("Proxy authentication failed (HTTP 407)".to_string());
+            }
+            if resp.status().is_success()
+                && let Ok(obj) = resp.json::<serde_json::Value>().await
+                && let Some(raw_url) = obj.get("url").and_then(|u| u.as_str())
+            {
+                return Ok((protocol.to_string(), raw_url.to_string()));
+            }
+        }
+
+        Err("Could not resolve playable transcoding stream URL via proxy".to_string())
     }
 
     async fn execute_json_with_datadome_retry(
@@ -1880,6 +2124,7 @@ impl SoundCloudClient {
         for attempt in 0..2 {
             let req = client
                 .post(&endpoint)
+                .timeout(Duration::from_secs(20))
                 .query(&[("client_id", client_id.as_str())]);
             let req = self.apply_browser_headers(req, Some(oauth_token));
             let resp = req

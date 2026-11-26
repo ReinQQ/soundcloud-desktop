@@ -63,6 +63,7 @@ export class TrackDetailView {
   private attachCurrentTime: boolean = true;
   private unsubscribeAudio: (() => void) | null = null;
   private unsubscribeLikes: (() => void) | null = null;
+  private destroyed: boolean = false;
 
   constructor(trackId: number) {
     this.trackId = trackId;
@@ -81,6 +82,7 @@ export class TrackDetailView {
   }
 
   public destroy(): void {
+    this.destroyed = true;
     if (this.unsubscribeAudio) {
       this.unsubscribeAudio();
       this.unsubscribeAudio = null;
@@ -118,6 +120,7 @@ export class TrackDetailView {
       scGetTrackComments(this.trackId),
       scGetMe(),
     ]);
+    if (this.destroyed) return;
 
     if (trackRes.status === 'rejected') {
       this.element.innerHTML = `
@@ -361,6 +364,7 @@ export class TrackDetailView {
 
       try {
         const posted = await scPostTrackComment(this.trackId, body, timestampMs);
+        if (this.destroyed) return;
         const commentObj: TrackComment = {
           id: posted.id || Date.now(),
           body: posted.body || body,
@@ -377,10 +381,13 @@ export class TrackDetailView {
         showToast('Comment posted');
         this.renderComments();
       } catch (err) {
+        if (this.destroyed) return;
         showToast(`Failed to post comment: ${String(err)}`);
       } finally {
-        postBtn.disabled = false;
-        postBtn.textContent = 'Post';
+        if (!this.destroyed) {
+          postBtn.disabled = false;
+          postBtn.textContent = 'Post';
+        }
       }
     };
 
@@ -454,6 +461,7 @@ export class TrackDetailView {
             }
           } else {
             await this.engine.playTrack(this.track, [this.track]);
+            if (this.destroyed || this.engine.currentTrack?.id !== this.track.id) return;
             this.engine.seek(timestampSec);
           }
         });

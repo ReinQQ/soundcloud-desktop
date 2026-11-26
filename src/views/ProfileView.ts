@@ -53,6 +53,7 @@ export class ProfileView {
   private editModal: EditProfileModal;
   private unsubscribeAudio: (() => void) | null = null;
   private unsubscribeLikes: (() => void) | null = null;
+  private destroyed: boolean = false;
 
   constructor(onOpenPlaylist: (id: number | string) => void, userId?: number) {
     this.engine = AudioEngine.getInstance();
@@ -63,7 +64,9 @@ export class ProfileView {
     this.element.className = 'view-container';
 
     this.editModal = new EditProfileModal(() => {
-      this.loadData();
+      if (!this.destroyed) {
+        this.loadData();
+      }
     });
 
     this.unsubscribeAudio = this.engine.subscribe(() => this.updatePlayButtons());
@@ -76,6 +79,7 @@ export class ProfileView {
   }
 
   public destroy(): void {
+    this.destroyed = true;
     if (this.unsubscribeAudio) {
       this.unsubscribeAudio();
       this.unsubscribeAudio = null;
@@ -124,11 +128,32 @@ export class ProfileView {
     `;
 
     try {
-      const me = await scGetMe();
+      let me: User | null = null;
+      let meError: unknown = null;
+      try {
+        me = await scGetMe();
+      } catch (err) {
+        meError = err;
+      }
+      if (this.destroyed) return;
+
       const viewingOwn = !this.targetUserId || (me !== null && me.id === this.targetUserId);
       this.isOwnProfile = viewingOwn;
 
       if (viewingOwn) {
+        if (meError) {
+          this.element.innerHTML = `
+            <div style="padding: 24px; color: var(--text-secondary);">
+              <h3>Could not reach SoundCloud</h3>
+              <p style="margin-top: 6px; font-size: 13px; color: var(--text-tertiary);">${String(meError)}</p>
+              <button class="btn-secondary" id="profile-btn-retry" style="margin-top: 14px;">Retry</button>
+            </div>
+          `;
+          this.element.querySelector('#profile-btn-retry')?.addEventListener('click', () => {
+            this.loadData();
+          });
+          return;
+        }
         if (!me || !me.id) {
           this.renderNotLoggedIn();
           return;
@@ -139,6 +164,7 @@ export class ProfileView {
           scGetUserTracks(me.id),
           scGetLibrary(me.id),
         ]);
+        if (this.destroyed) return;
 
         if (tracksRes.status === 'fulfilled') {
           const raw = tracksRes.value;
@@ -164,6 +190,7 @@ export class ProfileView {
         }
       } else if (this.targetUserId) {
         const profileData = await scGetUserProfile(this.targetUserId);
+        if (this.destroyed) return;
         this.user = profileData.user;
         this.tracks = (profileData.tracks || []).filter((t: Track) => t && t.id && t.title);
         this.playlists = profileData.playlists || [];
@@ -171,19 +198,17 @@ export class ProfileView {
         this.isFollowing = Boolean(profileData.is_following);
       }
 
+      if (this.destroyed) return;
       this.render();
     } catch (err) {
+      if (this.destroyed) return;
       console.error('Failed to load profile:', err);
-      if (this.isOwnProfile) {
-        this.renderNotLoggedIn();
-      } else {
-        this.element.innerHTML = `
-          <div style="padding: 24px; color: var(--text-secondary);">
-            <h3>Failed to load artist profile</h3>
-            <p style="margin-top: 6px; font-size: 13px; color: var(--text-tertiary);">${String(err)}</p>
-          </div>
-        `;
-      }
+      this.element.innerHTML = `
+        <div style="padding: 24px; color: var(--text-secondary);">
+          <h3>Failed to load profile</h3>
+          <p style="margin-top: 6px; font-size: 13px; color: var(--text-tertiary);">${String(err)}</p>
+        </div>
+      `;
     }
   }
 
@@ -195,8 +220,8 @@ export class ProfileView {
           Connect your SoundCloud account to see your profile, uploads, playlists, and statistics.
         </p>
         <button class="btn-primary" id="profile-btn-signin" style="padding: 9px 24px; display: inline-flex; align-items: center; gap: 8px;">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M1.175 12.222c-.324 0-.588.263-.588.587v3.63c0 .325.264.588.588.588s.588-.263.588-.588v-3.63c0-.324-.264-.587-.588-.587zm2.35-1.175c-.324 0-.588.263-.588.587v4.805c0 .325.264.588.588.588s.588-.263.588-.588v-4.805c0-.324-.264-.587-.588-.587zm2.35-1.763c-.324 0-.587.264-.587.588v6.568c0 .325.263.588.587.588.325 0 .588-.263.588-.588V9.872c0-.324-.263-.588-.588-.588zm2.352-.587c-.325 0-.588.263-.588.587v7.155c0 .325.263.588.588.588.324 0 .587-.263.587-.588V9.284c0-.324-.263-.587-.587-.587zm2.35-1.176c-.324 0-.587.263-.587.588v8.33c0 .325.263.588.587.588.325 0 .588-.263.588-.588V8.11c0-.325-.263-.588-.588-.588zm8.613 2.518c-.44 0-.865.084-1.258.236-.268-2.617-2.478-4.663-5.168-4.663-.648 0-1.274.122-1.855.344-.223.085-.285.174-.285.348v10.22c0 .18.14.327.318.345h8.248c1.79 0 3.243-1.452 3.243-3.243s-1.453-3.242-3.243-3.242z"/>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="#ffffff" style="flex-shrink: 0;">
+            <path d="M23.999 14.165c-.052 1.796-1.612 3.169-3.4 3.169h-8.18a.68.68 0 0 1-.675-.683V7.862a.747.747 0 0 1 .452-.724s.75-.513 2.333-.513a5.364 5.364 0 0 1 2.763.755 5.433 5.433 0 0 1 2.57 3.54c.282-.08.574-.121.868-.12.884 0 1.73.358 2.347.992s.948 1.49.922 2.373ZM10.721 8.421c.247 2.98.427 5.697 0 8.672a.264.264 0 0 1-.53 0c-.395-2.946-.22-5.718 0-8.672a.264.264 0 0 1 .53 0ZM9.072 9.448c.285 2.659.37 4.986-.006 7.655a.277.277 0 0 1-.55 0c-.331-2.63-.256-5.02 0-7.655a.277.277 0 0 1 .556 0Zm-1.663-.257c.27 2.726.39 5.171 0 7.904a.266.266 0 0 1-.532 0c-.38-2.69-.257-5.21 0-7.904a.266.266 0 0 1 .532 0Zm-1.647.77a26.108 26.108 0 0 1-.008 7.147.272.272 0 0 1-.542 0 27.955 27.955 0 0 1 0-7.147.275.275 0 0 1 .55 0Zm-1.67 1.769c.421 1.865.228 3.5-.029 5.388a.257.257 0 0 1-.514 0c-.21-1.858-.398-3.549 0-5.389a.272.272 0 0 1 .543 0Zm-1.655-.273c.388 1.897.26 3.508-.01 5.412-.026.28-.514.283-.54 0-.244-1.878-.347-3.54-.01-5.412a.283.283 0 0 1 .56 0Zm-1.668.911c.4 1.268.257 2.292-.026 3.572a.257.257 0 0 1-.514 0c-.241-1.262-.354-2.312-.023-3.572a.283.283 0 0 1 .563 0Z"/>
           </svg>
           <span>Sign In</span>
         </button>
@@ -305,6 +330,7 @@ export class ProfileView {
       followBtn.disabled = true;
       try {
         await scToggleFollow(this.user.id, nextFollow);
+        if (this.destroyed) return;
         this.isFollowing = nextFollow;
         followBtn.className = this.isFollowing ? 'btn-secondary' : 'btn-primary';
         followBtn.textContent = this.isFollowing ? 'Following' : 'Follow';
@@ -315,9 +341,12 @@ export class ProfileView {
         if (followersEl) followersEl.textContent = nextCount.toLocaleString();
         showToast(this.isFollowing ? `Followed ${this.user.username}` : `Unfollowed ${this.user.username}`);
       } catch (err) {
+        if (this.destroyed) return;
         showToast(`Action failed: ${String(err)}`);
       } finally {
-        followBtn.disabled = false;
+        if (!this.destroyed) {
+          followBtn.disabled = false;
+        }
       }
     });
 
@@ -399,15 +428,19 @@ export class ProfileView {
                 tracks = pl.tracks;
               } else {
                 const fullPl = await scGetPlaylist(pl.id);
+                if (this.destroyed) return;
                 tracks = (fullPl.tracks || []).filter((t: Track) => t && t.title);
               }
               if (tracks.length > 0) {
                 await this.engine.playCollection(pl.id, tracks, 0);
               }
             } catch (err) {
+              if (this.destroyed) return;
               console.error('Failed to play playlist:', err);
             } finally {
-              this.updatePlayButtons();
+              if (!this.destroyed) {
+                this.updatePlayButtons();
+              }
             }
           }
         });

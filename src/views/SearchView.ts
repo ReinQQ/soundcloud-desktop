@@ -30,6 +30,7 @@ export class SearchView {
   private onSelectQuery?: (query: string) => void;
   private unsubscribeAudio: (() => void) | null = null;
   private unsubscribeLikes: (() => void) | null = null;
+  private destroyed: boolean = false;
 
   constructor(
     onOpenPlaylist: (id: number | string) => void,
@@ -52,6 +53,8 @@ export class SearchView {
   }
 
   public destroy(): void {
+    this.destroyed = true;
+    this.searchSeq++;
     if (this.unsubscribeAudio) {
       this.unsubscribeAudio();
       this.unsubscribeAudio = null;
@@ -299,15 +302,19 @@ export class SearchView {
               tracks = pl.tracks;
             } else {
               const fullPl = await scGetPlaylist(collectionKey);
+              if (this.destroyed) return;
               tracks = (fullPl.tracks || []).filter((t: Track) => t && t.title);
             }
             if (tracks.length > 0) {
               await this.engine.playCollection(collectionKey, tracks, 0);
             }
           } catch (err) {
+            if (this.destroyed) return;
             console.error('Failed to load playlist for playback:', err);
           } finally {
-            this.updatePlayButtons();
+            if (!this.destroyed) {
+              this.updatePlayButtons();
+            }
           }
         }
       });

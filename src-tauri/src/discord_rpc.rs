@@ -43,7 +43,7 @@ pub struct DiscordRpcHandle {
 }
 
 impl DiscordRpcHandle {
-    pub fn new(_default_app_id: String, initial_enabled: bool) -> Self {
+    pub fn new(initial_enabled: bool) -> Self {
         let (sender, receiver) = mpsc::channel();
         let initial_status = if initial_enabled {
             "waiting_for_discord".to_string()
@@ -75,10 +75,6 @@ impl DiscordRpcHandle {
 
     pub fn set_enabled(&self, enabled: bool) {
         let _ = self.sender.send(DiscordRpcCommand::SetEnabled(enabled));
-    }
-
-    pub fn set_app_id(&self, _app_id: String) {
-        // App ID is hardcoded to DISCORD_APP_ID for security and stability
     }
 
     pub fn get_status(&self) -> String {
@@ -641,10 +637,10 @@ mod tests {
 
     #[test]
     fn test_status_initial_values() {
-        let handle_enabled = DiscordRpcHandle::new("1572112482062045194".to_string(), true);
+        let handle_enabled = DiscordRpcHandle::new(true);
         assert_eq!(handle_enabled.get_status(), "waiting_for_discord");
 
-        let handle_disabled = DiscordRpcHandle::new("1572112482062045194".to_string(), false);
+        let handle_disabled = DiscordRpcHandle::new(false);
         assert_eq!(handle_disabled.get_status(), "disabled");
     }
 }

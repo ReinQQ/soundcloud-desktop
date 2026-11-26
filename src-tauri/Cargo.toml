@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.2.0"
+version = "0.2.1"
 description = "A Tauri App"
 authors = ["you"]
 license = ""
@@ -31,6 +31,8 @@ discord-rich-presence = "1.1.0"
 url = "2.5"
 base64 = "0.22"
 reqwest = { version = "0.12", features = ["json", "cookies", "socks", "stream"] }
+native-tls = "0.2"
+tokio-native-tls = "0.3"
 regex = "1.10"
 tokio = { version = "1", features = ["macros", "sync", "rt-multi-thread", "net", "io-util"] }
 futures = "0.3"

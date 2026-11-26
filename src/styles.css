@@ -5,7 +5,6 @@
   --bg-card-hover: #2c2c32;
   --bg-elevated: rgba(255, 255, 255, 0.05);
   --border-subtle: 1px solid rgba(255, 255, 255, 0.08);
-  --border-strong: 1px solid rgba(255, 255, 255, 0.15);
   --accent: #fa243c;
   --accent-hover: #ff3b52;
   --accent-dim: rgba(250, 36, 60, 0.15);
@@ -27,7 +26,6 @@ html.sc-dark-theme {
   --bg-card-hover: #16161a;
   --bg-elevated: rgba(255, 255, 255, 0.08);
   --border-subtle: 1px solid rgba(255, 255, 255, 0.12);
-  --border-strong: 1px solid rgba(255, 255, 255, 0.22);
   --shadow-dock: 0 10px 30px rgba(0, 0, 0, 0.85);
 }
 
@@ -109,7 +107,7 @@ body {
 }
 
 .titlebar-brand svg {
-  fill: #FF5500;
+  fill: var(--accent);
 }
 
 .titlebar-status-group {
@@ -631,18 +629,15 @@ body {
   background: var(--bg-card);
 }
 
-.track-row.active,
 .track-row.playing {
   background: var(--accent-dim);
 }
 
-.track-row.active .track-row-title,
 .track-row.playing .track-row-title {
   color: var(--accent);
   font-weight: 600;
 }
 
-.track-row.active .track-row-idx,
 .track-row.playing .track-row-idx {
   color: var(--accent);
 }
@@ -1489,6 +1484,7 @@ input:checked + .toggle-slider:before {
 }
 
 .profile-avatar-wrapper {
+  position: relative;
   width: 120px;
   height: 120px;
   border-radius: 50%;
@@ -1598,10 +1594,6 @@ input:checked + .toggle-slider:before {
 
 .profile-banner-cam-btn:hover {
   background: rgba(0, 0, 0, 0.85);
-}
-
-.profile-avatar-wrapper {
-  position: relative;
 }
 
 .profile-avatar-cam-overlay {

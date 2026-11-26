@@ -70,6 +70,8 @@ export class AudioEngine {
   private lastRpcSyncTime: number = 0;
   private startupWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
   private consecutiveSkipCount: number = 0;
+  private playSeq: number = 0;
+  private activeMediaSeq: number = 0;
 
   private constructor() {
     this.audio = new Audio();
@@ -179,13 +181,17 @@ export class AudioEngine {
     });
 
     this.audio.addEventListener('error', () => {
+      const seq = this.activeMediaSeq;
+      if (seq === 0 || seq !== this.playSeq) {
+        return;
+      }
       const err = this.audio.error;
       const msg = `Audio element error: code=${err?.code}, message=${err?.message}, current src=${this.audio.src}`;
       console.error(msg);
       logFrontendError('error', msg).catch(() => {});
       if (this.currentTrack) {
         scClearStreamCache(this.currentTrack.id).catch(() => {});
-        this.handlePlaybackFailure(this.currentTrack.id, 'Audio element error');
+        this.handlePlaybackFailure(this.currentTrack.id, 'Audio element error', seq);
       }
     });
   }
@@ -218,8 +224,13 @@ export class AudioEngine {
     }
   }
 
-  private handlePlaybackFailure(trackId: number, message: string): void {
+  private handlePlaybackFailure(trackId: number, message: string, seq: number): void {
+    if (seq !== this.playSeq) {
+      return;
+    }
+
     this.clearStartupWatchdog();
+    this.activeMediaSeq = 0;
     scClearStreamCache(trackId).catch(() => {});
 
     if (!this.currentTrack || this.currentTrack.id !== trackId) {
@@ -278,7 +289,15 @@ export class AudioEngine {
     collectionId?: number | string,
     isAutoSkip?: boolean
   ): Promise<void> {
+    const seq = ++this.playSeq;
+    this.activeMediaSeq = 0;
     this.clearStartupWatchdog();
+
+    if (this.hls) {
+      this.hls.destroy();
+      this.hls = null;
+    }
+    this.audio.pause();
 
     if (!isAutoSkip) {
       this.consecutiveSkipCount = 0;
@@ -323,30 +342,34 @@ export class AudioEngine {
 
     const trackIdToWatch = track.id;
     this.startupWatchdogTimer = setTimeout(() => {
-      if (this.currentTrack?.id === trackIdToWatch && (this.currentTime === 0 || this.audio.readyState < 3)) {
+      if (seq === this.playSeq && this.currentTrack?.id === trackIdToWatch && (this.currentTime === 0 || this.audio.readyState < 3)) {
         console.warn(`Startup watchdog timeout (6s) on track ${trackIdToWatch}: readyState=${this.audio.readyState}, currentTime=${this.currentTime}`);
-        this.handlePlaybackFailure(trackIdToWatch, 'Startup watchdog timeout (6s)');
+        this.handlePlaybackFailure(trackIdToWatch, 'Startup watchdog timeout (6s)', seq);
       }
     }, 6000);
 
     try {
       const resolution: StreamResolution = await scResolveStream(track.id);
-      if (this.currentTrack?.id !== trackIdToWatch) {
+      if (seq !== this.playSeq) {
         return;
       }
-      await this.loadStreamSource(resolution);
+      await this.loadStreamSource(resolution, seq);
+      if (seq !== this.playSeq) {
+        return;
+      }
 
       const nextIdx = this.queueIndex + 1;
       if (nextIdx < this.queue.length && this.queue[nextIdx]) {
         scResolveStream(this.queue[nextIdx].id).catch(() => {});
       }
     } catch (err: unknown) {
+      if (seq !== this.playSeq) {
+        return;
+      }
       console.error('Failed to resolve stream for track:', track.id, err);
       const errMsg = err instanceof Error ? err.message : String(err || 'Stream resolution failed');
       logFrontendError('warn', `Failed to resolve stream for track ${track.id}: ${errMsg}`).catch(() => {});
-      if (this.currentTrack?.id === trackIdToWatch) {
-        this.handlePlaybackFailure(trackIdToWatch, errMsg);
-      }
+      this.handlePlaybackFailure(trackIdToWatch, errMsg, seq);
     }
   }
 
@@ -356,13 +379,6 @@ export class AudioEngine {
     if (tracks.length === 0) return;
     const startIdx = Math.max(0, Math.min(startIndex, tracks.length - 1));
     await this.playTrack(tracks[startIdx], tracks, startIdx, collectionId);
-  }
-
-  public playQueue(tracks: Track[], startIndex: number = 0, collectionId?: number | string): Promise<void> {
-    this.consecutiveSkipCount = 0;
-    if (tracks.length === 0) return Promise.resolve();
-    const startIdx = Math.max(0, Math.min(startIndex, tracks.length - 1));
-    return this.playTrack(tracks[startIdx], tracks, startIdx, collectionId);
   }
 
   public isCollectionPlaying(collectionId: number | string): boolean {
@@ -395,7 +411,11 @@ export class AudioEngine {
     }
   }
 
-  private async loadStreamSource(resolution: StreamResolution): Promise<void> {
+  private async loadStreamSource(resolution: StreamResolution, seq: number): Promise<void> {
+    if (seq !== this.playSeq) {
+      return;
+    }
+
     if (this.hls) {
       this.hls.destroy();
       this.hls = null;
@@ -406,12 +426,15 @@ export class AudioEngine {
 
     if (encrypted) {
       isEmeSupported = await this.checkWidevineSupport();
+      if (seq !== this.playSeq) {
+        return;
+      }
       logFrontendError('info', `Track ${this.currentTrack?.id} is encrypted. Widevine EME check: supported=${isEmeSupported}, license_url=${license_url || 'none'}`).catch(() => {});
       if (!isEmeSupported) {
         const msg = 'Protected stream (DRM not supported in WebView2)';
         logFrontendError('warn', `Track ${this.currentTrack?.id}: ${msg}`).catch(() => {});
         if (this.currentTrack) {
-          this.handlePlaybackFailure(this.currentTrack.id, msg);
+          this.handlePlaybackFailure(this.currentTrack.id, msg, seq);
         }
         return;
       }
@@ -466,6 +489,7 @@ export class AudioEngine {
 
       const hls = new Hls(hlsConfig);
       this.hls = hls;
+      this.activeMediaSeq = seq;
       let networkRetryCount = 0;
       let mediaRetryCount = 0;
       const MAX_HLS_RETRIES = 2;
@@ -473,16 +497,22 @@ export class AudioEngine {
       hls.loadSource(streamUrl);
       hls.attachMedia(this.audio);
       hls.on(Hls.Events.KEY_LOADED, () => {
+        if (seq !== this.playSeq) return;
         logFrontendError('info', `HLS decryption key successfully loaded for track ${this.currentTrack?.id}`).catch(() => {});
       });
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        if (seq !== this.playSeq) return;
         this.audio.play().catch(e => {
+          if (seq !== this.playSeq) return;
           const msg = `Audio play() failed on MANIFEST_PARSED: ${e?.message || e}`;
           console.error(msg);
           logFrontendError('error', msg).catch(() => {});
         });
       });
       hls.on(Hls.Events.ERROR, (_, data) => {
+        if (seq !== this.playSeq || this.hls !== hls) {
+          return;
+        }
         const errObj = data as {
           type: string;
           details: string;
@@ -508,7 +538,7 @@ export class AudioEngine {
                 hls.destroy();
                 this.hls = null;
                 if (this.currentTrack) {
-                  this.handlePlaybackFailure(this.currentTrack.id, `HLS fatal network error: ${data.details}`);
+                  this.handlePlaybackFailure(this.currentTrack.id, `HLS fatal network error: ${data.details}`, seq);
                 }
               }
               break;
@@ -522,7 +552,7 @@ export class AudioEngine {
                 hls.destroy();
                 this.hls = null;
                 if (this.currentTrack) {
-                  this.handlePlaybackFailure(this.currentTrack.id, `HLS fatal media error: ${data.details}`);
+                  this.handlePlaybackFailure(this.currentTrack.id, `HLS fatal media error: ${data.details}`, seq);
                 }
               }
               break;
@@ -531,7 +561,7 @@ export class AudioEngine {
               hls.destroy();
               this.hls = null;
               if (this.currentTrack) {
-                this.handlePlaybackFailure(this.currentTrack.id, `HLS fatal error: ${data.details}`);
+                this.handlePlaybackFailure(this.currentTrack.id, `HLS fatal error: ${data.details}`, seq);
               }
               break;
           }
@@ -540,9 +570,11 @@ export class AudioEngine {
         }
       });
     } else {
+      this.activeMediaSeq = seq;
       this.audio.src = streamUrl;
       this.audio.load();
       this.audio.play().catch(e => {
+        if (seq !== this.playSeq) return;
         const msg = `Audio play() failed for progressive stream: ${e?.message || e}`;
         console.error(msg);
         logFrontendError('error', msg).catch(() => {});
@@ -566,10 +598,6 @@ export class AudioEngine {
     } else {
       this.resume();
     }
-  }
-
-  public togglePlayPause(): void {
-    this.togglePlay();
   }
 
   public pause(): void {
@@ -650,19 +678,6 @@ export class AudioEngine {
     this.notify();
   }
 
-  public toggleMute(): void {
-    if (this.isMuted) {
-      this.isMuted = false;
-      this.audio.muted = false;
-      this.audio.volume = this.volume > 0 ? this.volume : 0.5;
-    } else {
-      this.isMuted = true;
-      this.audio.muted = true;
-      this.audio.volume = 0;
-    }
-    this.notify();
-  }
-
   public toggleShuffle(): void {
     this.shuffle = !this.shuffle;
     if (this.shuffle) {
@@ -708,12 +723,6 @@ export class AudioEngine {
     }
   }
 
-  public addToQueue(track: Track): void {
-    this.queue.push(track);
-    this.originalQueue.push(track);
-    this.notify();
-  }
-
   public removeFromQueue(index: number): void {
     if (index >= 0 && index < this.queue.length) {
       const removed = this.queue.splice(index, 1)[0];
@@ -727,6 +736,8 @@ export class AudioEngine {
           if (this.queueIndex >= this.queue.length) this.queueIndex = 0;
           this.playTrack(this.queue[this.queueIndex], undefined, undefined, this.currentCollectionId ?? undefined);
         } else {
+          this.playSeq++;
+          this.activeMediaSeq = 0;
           this.currentTrack = null;
           this.pause();
         }

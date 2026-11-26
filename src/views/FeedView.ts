@@ -15,6 +15,7 @@ export class FeedView {
   private likesStore: LikesStore;
   private unsubscribeAudio: (() => void) | null = null;
   private unsubscribeLikes: (() => void) | null = null;
+  private destroyed: boolean = false;
 
   constructor() {
     this.engine = AudioEngine.getInstance();
@@ -32,6 +33,7 @@ export class FeedView {
   }
 
   public destroy(): void {
+    this.destroyed = true;
     if (this.unsubscribeAudio) {
       this.unsubscribeAudio();
       this.unsubscribeAudio = null;
@@ -61,8 +63,10 @@ export class FeedView {
 
     try {
       const data = await scGetStream();
+      if (this.destroyed) return;
       this.render(data);
     } catch (err) {
+      if (this.destroyed) return;
       this.element.innerHTML = `
         <div style="padding: 32px; text-align: center; max-width: 440px; margin: 40px auto; background: var(--bg-card); border-radius: var(--radius-xl); border: var(--border-subtle);">
           <h3 style="font-size: 18px; margin-bottom: 8px;">Sign in to see your Feed</h3>

@@ -42,14 +42,6 @@ export class LikesStore {
     return [...this.likedTracks];
   }
 
-  public getLikedCount(): number {
-    return this.likedTracks.length;
-  }
-
-  public isInitialized(): boolean {
-    return this.initialized;
-  }
-
   public setTracks(tracks: Track[]): void {
     const remoteIds = new Set(tracks.map(t => t.id));
     const localLikedOnly = this.likedTracks.filter(t => this.likedIds.has(t.id) && !remoteIds.has(t.id));

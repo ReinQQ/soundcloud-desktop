@@ -24,6 +24,7 @@ export class LibraryView {
   private onOpenPlaylist: (id: number | string) => void;
   private unsubscribeAudio: (() => void) | null = null;
   private unsubscribeLikes: (() => void) | null = null;
+  private destroyed: boolean = false;
 
   constructor(onOpenPlaylist: (id: number | string) => void, initialTab: 'likes' | 'playlists' = 'likes') {
     this.engine = AudioEngine.getInstance();
@@ -45,6 +46,7 @@ export class LibraryView {
   }
 
   public destroy(): void {
+    this.destroyed = true;
     if (this.unsubscribeAudio) {
       this.unsubscribeAudio();
       this.unsubscribeAudio = null;
@@ -53,16 +55,6 @@ export class LibraryView {
       this.unsubscribeLikes();
       this.unsubscribeLikes = null;
     }
-  }
-
-  public setTab(tab: 'likes' | 'playlists'): void {
-    this.activeTab = tab;
-    const pills = this.element.querySelectorAll<HTMLElement>('.protocol-pill');
-    pills.forEach((p) => {
-      if (p.getAttribute('data-tab') === tab) p.classList.add('active');
-      else p.classList.remove('active');
-    });
-    this.renderContent();
   }
 
   private onLikesUpdated(): void {
@@ -103,6 +95,7 @@ export class LibraryView {
 
     try {
       const data = await scGetLibrary();
+      if (this.destroyed) return;
       const rawLikes = data.likes || [];
       const tracks: Track[] = rawLikes
         .map((item: LibraryTrackItem) => (item.track || item) as unknown as Track)
@@ -113,6 +106,7 @@ export class LibraryView {
       this.playlists = data.playlists || [];
       this.render();
     } catch (err) {
+      if (this.destroyed) return;
       this.element.innerHTML = `
         <div style="padding: 32px; text-align: center; max-width: 440px; margin: 40px auto; background: var(--bg-card); border-radius: var(--radius-xl); border: var(--border-subtle);">
           <h3 style="font-size: 18px; margin-bottom: 8px;">Sign in to view your Library</h3>
@@ -232,15 +226,19 @@ export class LibraryView {
                 tracks = pl.tracks;
               } else {
                 const fullPl = await scGetPlaylist(pl.id);
+                if (this.destroyed) return;
                 tracks = (fullPl.tracks || []).filter((t: Track) => t && t.title);
               }
               if (tracks.length > 0) {
                 await this.engine.playCollection(pl.id, tracks, 0);
               }
             } catch (err) {
+              if (this.destroyed) return;
               console.error('Failed to load playlist for playback:', err);
             } finally {
-              this.updatePlayButtons();
+              if (!this.destroyed) {
+                this.updatePlayButtons();
+              }
             }
           }
         });

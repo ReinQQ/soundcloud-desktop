@@ -18,6 +18,7 @@ export class CollectionDetailView {
   private playlist: Playlist | null = null;
   private unsubscribeAudio: (() => void) | null = null;
   private unsubscribeLikes: (() => void) | null = null;
+  private destroyed: boolean = false;
 
   constructor(playlistId: number | string) {
     this.engine = AudioEngine.getInstance();
@@ -36,6 +37,7 @@ export class CollectionDetailView {
   }
 
   public destroy(): void {
+    this.destroyed = true;
     if (this.unsubscribeAudio) {
       this.unsubscribeAudio();
       this.unsubscribeAudio = null;
@@ -71,8 +73,10 @@ export class CollectionDetailView {
 
     try {
       this.playlist = await scGetPlaylist(this.playlistId);
+      if (this.destroyed) return;
       this.render();
     } catch (err) {
+      if (this.destroyed) return;
       this.element.innerHTML = `
         <div style="padding: 24px; color: var(--text-secondary);">
           <h3>Failed to load collection</h3>

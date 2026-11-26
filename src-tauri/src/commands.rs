@@ -2,12 +2,15 @@ use crate::discord_rpc::{
     sanitize_text, validate_cover_url, validate_track_url, DiscordRpcHandle, TrackPayload,
 };
 use crate::settings::AppSettings;
-use crate::soundcloud::{self, SoundCloudClient, StreamResolution};
+use crate::soundcloud::{self, GetMeError, SoundCloudClient, StreamResolution};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_updater::UpdaterExt;
+
+static LOGIN_SESSION_GEN: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UpdateCheckResponse {
@@ -101,77 +104,60 @@ pub async fn save_settings(
     }
     new_settings.validate_and_sanitize();
 
+    let (prev_proxy_enabled, prev_proxy_url, prev_proxy_active) = {
+        let guard = settings
+            .read()
+            .map_err(|e| format!("Failed to acquire read lock on settings: {e}"))?;
+        // Server-managed credentials must never be overwritten by UI settings payloads.
+        new_settings.oauth_token = guard.oauth_token.clone();
+        new_settings.cached_client_id = guard.cached_client_id.clone();
+        new_settings.datadome_cookie = guard.datadome_cookie.clone();
+        (guard.proxy_enabled, guard.proxy_url.clone(), guard.proxy_active)
+    };
+
     rpc.set_enabled(new_settings.discord_rpc_enabled);
-    rpc.set_app_id(new_settings.discord_app_id.clone());
 
     let mut is_proxy_active = false;
 
     if new_settings.proxy_enabled {
-        match crate::settings::validate_proxy_url(&new_settings.proxy_url) {
-            Ok(parsed) => {
-                if crate::proxy_bridge::needs_proxy_bridge(&parsed) {
-                    let mut b_guard = proxy_bridge.0.write().await;
-                    let parsed_str = parsed.as_str().trim_end_matches('/');
-                    let need_new = match *b_guard {
-                        Some(ref existing) => existing.upstream_url.trim_end_matches('/') != parsed_str,
-                        None => true,
-                    };
-                    if need_new {
-                        if let Some(ref old) = *b_guard {
-                            old.shutdown();
-                        }
-                        match crate::proxy_bridge::ProxyBridge::start(parsed).await {
-                            Ok(nb) => {
-                                if let Ok(mut ep_guard) = webview_proxy.0.write() {
-                                    *ep_guard = Some(nb.local_http_str());
-                                }
-                                *b_guard = Some(nb);
-                                is_proxy_active = true;
-                            }
-                            Err(e) => {
-                                log::error!("Failed to restart proxy bridge: {e}");
-                                *b_guard = None;
-                                if let Ok(mut ep_guard) = webview_proxy.0.write() {
-                                    *ep_guard = None;
-                                }
-                            }
-                        }
-                    } else if let Some(ref existing) = *b_guard {
-                        log::info!("Reusing existing proxy bridge on 127.0.0.1:{}", existing.local_port);
-                        if let Ok(mut ep_guard) = webview_proxy.0.write() {
-                            *ep_guard = Some(existing.local_http_str());
-                        }
-                        is_proxy_active = true;
-                    }
-                } else {
-                    let mut b_guard = proxy_bridge.0.write().await;
-                    if let Some(ref old) = *b_guard {
-                        old.shutdown();
-                    }
-                    *b_guard = None;
+        let parsed = crate::settings::validate_proxy_url(&new_settings.proxy_url)?;
+        let parsed_str = parsed.as_str().trim_end_matches('/');
+        let mut b_guard = proxy_bridge.0.write().await;
+        let need_new = match *b_guard {
+            Some(ref existing) => existing.upstream_url.trim_end_matches('/') != parsed_str,
+            None => true,
+        };
+        if need_new {
+            if let Some(old) = b_guard.take() {
+                old.shutdown();
+            }
+            match crate::proxy_bridge::ProxyBridge::start(parsed).await {
+                Ok(nb) => {
                     if let Ok(mut ep_guard) = webview_proxy.0.write() {
-                        *ep_guard = Some(parsed.as_str().trim_end_matches('/').to_string());
+                        *ep_guard = Some(nb.local_http_str());
                     }
+                    *b_guard = Some(nb);
                     is_proxy_active = true;
                 }
-            }
-            Err(_) => {
-                let mut b_guard = proxy_bridge.0.write().await;
-                if let Some(ref old) = *b_guard {
-                    old.shutdown();
-                }
-                *b_guard = None;
-                if let Ok(mut ep_guard) = webview_proxy.0.write() {
-                    *ep_guard = None;
+                Err(e) => {
+                    log::error!("Failed to start proxy bridge: {e}");
+                    if let Ok(mut ep_guard) = webview_proxy.0.write() {
+                        *ep_guard = None;
+                    }
+                    return Err(format!("Failed to start local proxy bridge: {e}"));
                 }
             }
+        } else if let Some(ref existing) = *b_guard {
+            if let Ok(mut ep_guard) = webview_proxy.0.write() {
+                *ep_guard = Some(existing.local_http_str());
+            }
+            is_proxy_active = true;
         }
     } else {
         let mut b_guard = proxy_bridge.0.write().await;
-        if let Some(ref old) = *b_guard {
+        if let Some(old) = b_guard.take() {
             old.shutdown();
         }
-        *b_guard = None;
         if let Ok(mut ep_guard) = webview_proxy.0.write() {
             *ep_guard = None;
         }
@@ -179,22 +165,39 @@ pub async fn save_settings(
 
     new_settings.proxy_active = is_proxy_active;
 
-    if let Err(e) = sc_client.rebuild_client(new_settings.proxy_enabled, &new_settings.proxy_url).await {
-        log::warn!("Failed to rebuild SoundCloudClient with new settings: {e}");
-        return Err(format!("Settings saved but proxy configuration failed: {e}"));
+    let proxy_changed = prev_proxy_enabled != new_settings.proxy_enabled
+        || prev_proxy_url != new_settings.proxy_url
+        || prev_proxy_active != is_proxy_active;
+
+    if proxy_changed {
+        sc_client
+            .rebuild_client(new_settings.proxy_enabled, &new_settings.proxy_url)
+            .await
+            .map_err(|e| format!("Proxy configuration failed: {e}"))?;
     }
 
-    new_settings
+    let persisted = {
+        let mut current = settings
+            .write()
+            .map_err(|e| format!("Failed to acquire write lock on settings: {e}"))?;
+        // Re-preserve server-managed fields under write lock to eliminate any TOCTOU window.
+        new_settings.oauth_token = current.oauth_token.clone();
+        new_settings.cached_client_id = current.cached_client_id.clone();
+        new_settings.datadome_cookie = current.datadome_cookie.clone();
+        *current = new_settings.clone();
+        current.clone()
+    };
+
+    if proxy_changed {
+        // Clear caches after settings write so no concurrent resolution cached under the old proxy flag survives.
+        sc_client.clear_all_caches();
+    }
+
+    persisted
         .save(&app)
         .map_err(|e| format!("Failed to persist settings: {e}"))?;
 
-    if let Ok(mut current) = settings.write() {
-        *current = new_settings.clone();
-    } else {
-        return Err("Failed to acquire write lock on settings".to_string());
-    }
-
-    Ok(new_settings)
+    Ok(persisted)
 }
 
 #[tauri::command]
@@ -272,11 +275,6 @@ pub fn window_action(
 }
 
 #[tauri::command]
-pub fn restart_app(app: AppHandle) {
-    app.restart();
-}
-
-#[tauri::command]
 pub async fn sc_get_discover(
     client: State<'_, SoundCloudClient>,
     settings: State<'_, Arc<RwLock<AppSettings>>>,
@@ -336,16 +334,6 @@ pub async fn sc_get_playlist(
 ) -> Result<serde_json::Value, String> {
     let token = settings.read().ok().and_then(|s| s.oauth_token.clone());
     client.get_playlist(&id_or_urn, token.as_deref()).await
-}
-
-#[tauri::command]
-pub async fn sc_get_track(
-    client: State<'_, SoundCloudClient>,
-    settings: State<'_, Arc<RwLock<AppSettings>>>,
-    id: u64,
-) -> Result<serde_json::Value, String> {
-    let token = settings.read().ok().and_then(|s| s.oauth_token.clone());
-    client.get_track(id, token.as_deref()).await
 }
 
 #[tauri::command]
@@ -420,21 +408,36 @@ pub async fn sc_login(
     webview_proxy: State<'_, crate::WebviewProxyEndpoint>,
     proxy_bridge: State<'_, crate::ProxyBridgeState>,
 ) -> Result<(), String> {
-    log::info!("sc_login requested: preparing isolated oauth-login session");
+    let session_gen = LOGIN_SESSION_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    log::info!("sc_login requested (session_gen={session_gen}): preparing isolated oauth-login session");
 
     if let Some(w) = app.get_webview_window("oauth-login") {
-        let _ = w.destroy();
+        let _ = w.close();
+        for _ in 0..20 {
+            if app.get_webview_window("oauth-login").is_none() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
-    let oauth_dir = app
+    let local_data_dir = app
         .path()
         .app_local_data_dir()
-        .map_err(|e| format!("Failed to resolve app local data directory: {e}"))?
-        .join("webview2_oauth");
+        .map_err(|e| format!("Failed to resolve app local data directory: {e}"))?;
 
-    if oauth_dir.exists() {
-        let _ = std::fs::remove_dir_all(&oauth_dir);
+    // Best-effort cleanup of stale oauth profile directories without failing on transient Windows file locks.
+    if let Ok(entries) = std::fs::read_dir(&local_data_dir) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str()
+                && (name == "webview2_oauth" || name.starts_with("webview2_oauth_"))
+            {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
     }
+
+    let oauth_dir = local_data_dir.join(format!("webview2_oauth_{session_gen}"));
     let _ = std::fs::create_dir_all(&oauth_dir);
 
     #[cfg(windows)]
@@ -445,21 +448,38 @@ pub async fn sc_login(
     #[cfg(not(windows))]
     let mut non_windows_proxy_url: Option<url::Url> = None;
 
-    let proxy_enabled = settings.read().map(|s| s.proxy_enabled).unwrap_or(false);
+    let (proxy_enabled, configured_proxy_url) = settings
+        .read()
+        .map(|s| (s.proxy_enabled, s.proxy_url.clone()))
+        .unwrap_or((false, String::new()));
+
     let mut live_proxy_endpoint: Option<String> = None;
 
     if proxy_enabled {
-        let b_guard = proxy_bridge.0.read().await;
-        if let Some(ref bridge) = *b_guard {
-            live_proxy_endpoint = bridge.current_local_endpoint();
-        } else if let Ok(s_guard) = settings.read()
-            && let Ok(parsed) = crate::settings::validate_proxy_url(&s_guard.proxy_url) {
-                let s = format!("{}://{}:{}", parsed.scheme(), parsed.host_str().unwrap_or(""), parsed.port().unwrap_or(8080));
-                live_proxy_endpoint = Some(s);
-        }
-        if live_proxy_endpoint.is_none()
-            && let Ok(ep_guard) = webview_proxy.0.read() {
-                live_proxy_endpoint = ep_guard.clone();
+        let parsed = crate::settings::validate_proxy_url(&configured_proxy_url)?;
+        let parsed_str = parsed.as_str().trim_end_matches('/');
+        let mut b_guard = proxy_bridge.0.write().await;
+        let matches_active = match *b_guard {
+            Some(ref bridge) => bridge.upstream_url.trim_end_matches('/') == parsed_str,
+            None => false,
+        };
+        if !matches_active {
+            if let Some(old) = b_guard.take() {
+                old.shutdown();
+            }
+            let started = crate::proxy_bridge::ProxyBridge::start(parsed).await?;
+            let ep = started.local_http_str();
+            if let Ok(mut ep_guard) = webview_proxy.0.write() {
+                *ep_guard = Some(ep.clone());
+            }
+            *b_guard = Some(started);
+            live_proxy_endpoint = Some(ep);
+        } else if let Some(ref bridge) = *b_guard {
+            let ep = bridge.local_http_str();
+            if let Ok(mut ep_guard) = webview_proxy.0.write() {
+                *ep_guard = Some(ep.clone());
+            }
+            live_proxy_endpoint = Some(ep);
         }
     }
 
@@ -475,7 +495,7 @@ pub async fn sc_login(
                 non_windows_proxy_url = Some(u);
             }
         }
-        log::info!("sc_login using proxy endpoint: {clean_endpoint}");
+        log::info!("sc_login using active ProxyBridge endpoint: {clean_endpoint}");
     }
 
     #[cfg(windows)]
@@ -535,6 +555,10 @@ pub async fn sc_login(
     let token_handled = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let token_handled_nav = token_handled.clone();
     let token_handled_poll = token_handled;
+    let window_closing = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let window_closing_nav = window_closing.clone();
+    let window_closing_event = window_closing.clone();
+    let window_closing_poll = window_closing;
 
     let popup_app = app.clone();
     let popup_oauth_dir = oauth_dir.clone();
@@ -548,14 +572,20 @@ pub async fn sc_login(
         .parse::<url::Url>()
         .map_err(|e| format!("Invalid signin URL: {e}"))?;
 
+    let app_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/128x128@2x.png"))
+        .map_err(|e| format!("Failed to load oauth-login window icon: {e}"))?;
+
     let mut builder = WebviewWindowBuilder::new(
         &app,
         "oauth-login",
         WebviewUrl::External(signin_url),
     )
     .title("Sign In - SoundCloud")
+    .icon(app_icon)
+    .map_err(|e| format!("Failed to set oauth-login window icon: {e}"))?
     .user_agent(crate::soundcloud::CHROME_USER_AGENT)
-    .inner_size(520.0, 720.0)
+    .inner_size(980.0, 760.0)
+    .min_inner_size(820.0, 640.0)
     .center()
     .data_directory(oauth_dir.clone())
     .initialization_script(&monitor_script)
@@ -566,56 +596,75 @@ pub async fn sc_login(
                 .find(|(k, _)| k == "token")
                 .map(|(_, v)| v.to_string());
             if let Some(token) = token_opt
-                && !token.is_empty() {
-                    let client_clone = client_for_nav.clone();
-                    let settings_clone = settings_for_nav.clone();
-                    let app_clone = app_handle_for_nav.clone();
-                    let handled_flag = token_handled_nav.clone();
-                    tauri::async_runtime::spawn(async move {
-                        if handled_flag.compare_exchange(false, true, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst).is_err() {
-                            return;
-                        }
-                        log::info!("Validating intercepted token via /me...");
-                        if let Some(win) = app_clone.get_webview_window("oauth-login")
-                            && let Ok(cookies) = win.cookies() {
-                                for c in cookies {
-                                    if c.name() == "datadome" {
-                                        let dd = c.value().trim().trim_matches('"').to_string();
-                                        if !dd.is_empty() {
-                                            if let Ok(mut lock) = settings_clone.write() {
-                                                lock.datadome_cookie = Some(dd);
-                                                let _ = lock.save(&app_clone);
-                                            }
-                                            break;
-                                        }
+                && !token.is_empty()
+            {
+                let client_clone = client_for_nav.clone();
+                let settings_clone = settings_for_nav.clone();
+                let app_clone = app_handle_for_nav.clone();
+                let handled_flag = token_handled_nav.clone();
+                let closing_flag = window_closing_nav.clone();
+                tauri::async_runtime::spawn(async move {
+                    if LOGIN_SESSION_GEN.load(Ordering::SeqCst) != session_gen
+                        || closing_flag.load(Ordering::SeqCst)
+                    {
+                        return;
+                    }
+                    if handled_flag
+                        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_err()
+                    {
+                        return;
+                    }
+                    log::info!("Validating intercepted token via /me (session_gen={session_gen})...");
+                    if !closing_flag.load(Ordering::SeqCst)
+                        && let Some(win) = app_clone.get_webview_window("oauth-login")
+                        && let Ok(cookies) = win.cookies()
+                    {
+                        for c in cookies {
+                            if c.name() == "datadome" {
+                                let dd = c.value().trim().trim_matches('"').to_string();
+                                if !dd.is_empty()
+                                    && LOGIN_SESSION_GEN.load(Ordering::SeqCst) == session_gen
+                                {
+                                    if let Ok(mut lock) = settings_clone.write() {
+                                        lock.datadome_cookie = Some(dd);
+                                        let _ = lock.save(&app_clone);
                                     }
+                                    break;
                                 }
-                            }
-                        match client_clone.get_me(&token).await {
-                            Ok(user) if user.get("id").is_some() => {
-                                let username = user
-                                    .get("username")
-                                    .and_then(|u| u.as_str())
-                                    .unwrap_or("User");
-                                log::info!("OAuth token verified successfully for user: {username}");
-                                client_clone.clear_user_cache();
-                                if let Ok(mut lock) = settings_clone.write() {
-                                    lock.oauth_token = Some(token.clone());
-                                    let _ = lock.save(&app_clone);
-                                }
-                                if let Some(w) = app_clone.get_webview_window("oauth-login") {
-                                    let _ = w.destroy();
-                                }
-                                let _ = app_clone.emit_to("main", "auth-updated", token);
-                            }
-                            other => {
-                                log::warn!("OAuth token validation failed: {other:?}. Keeping oauth-login open.");
-                                handled_flag.store(false, std::sync::atomic::Ordering::SeqCst);
                             }
                         }
-                    });
-                    return false;
-                }
+                    }
+                    match client_clone.get_me(&token).await {
+                        Ok(user) if user.get("id").is_some() => {
+                            if LOGIN_SESSION_GEN.load(Ordering::SeqCst) != session_gen {
+                                log::info!("Ignoring stale oauth-login callback (session_gen={session_gen})");
+                                return;
+                            }
+                            let username = user
+                                .get("username")
+                                .and_then(|u| u.as_str())
+                                .unwrap_or("User");
+                            log::info!("OAuth token verified successfully for user: {username}");
+                            client_clone.clear_user_cache();
+                            if let Ok(mut lock) = settings_clone.write() {
+                                lock.oauth_token = Some(token.clone());
+                                let _ = lock.save(&app_clone);
+                            }
+                            closing_flag.store(true, Ordering::SeqCst);
+                            if let Some(w) = app_clone.get_webview_window("oauth-login") {
+                                let _ = w.close();
+                            }
+                            let _ = app_clone.emit_to("main", "auth-updated", token);
+                        }
+                        other => {
+                            log::warn!("OAuth token validation failed: {other:?}. Keeping oauth-login open.");
+                            handled_flag.store(false, Ordering::SeqCst);
+                        }
+                    }
+                });
+                return false;
+            }
         }
         true
     })
@@ -637,17 +686,28 @@ pub async fn sc_login(
         .window_features(features)
         .title("Sign In - SoundCloud")
         .user_agent(crate::soundcloud::CHROME_USER_AGENT)
+        .inner_size(600.0, 720.0)
+        .center()
         .data_directory(popup_oauth_dir.clone())
         .initialization_script(&popup_script_str)
         .on_navigation(move |nav_url| {
             if nav_url.host_str() == Some("close.scdesktop.invalid") {
                 if let Some(w) = popup_app_inner.get_webview_window(&popup_label) {
-                    let _ = w.destroy();
+                    let _ = w.close();
                 }
                 return false;
             }
             true
         });
+
+        if let Ok(popup_icon) =
+            tauri::image::Image::from_bytes(include_bytes!("../icons/128x128@2x.png"))
+            && let Ok(b) = p_builder.icon(popup_icon)
+        {
+            p_builder = b;
+        } else {
+            return tauri::webview::NewWindowResponse::Deny;
+        }
 
         #[cfg(windows)]
         {
@@ -659,15 +719,7 @@ pub async fn sc_login(
         }
 
         match p_builder.build() {
-            Ok(win) => {
-                let win_clone = win.clone();
-                win.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { .. } = event {
-                        let _ = win_clone.destroy();
-                    }
-                });
-                tauri::webview::NewWindowResponse::Create { window: win }
-            }
+            Ok(win) => tauri::webview::NewWindowResponse::Create { window: win },
             Err(e) => {
                 log::warn!("Failed to create nested OAuth popup window: {e}");
                 tauri::webview::NewWindowResponse::Deny
@@ -688,23 +740,23 @@ pub async fn sc_login(
         .build()
         .map_err(|e| format!("Failed to create login window: {e}"))?;
 
-    log::info!("Created oauth-login window successfully with isolated profile");
+    log::info!("Created oauth-login window successfully (session_gen={session_gen})");
 
-    let win_clone = win.clone();
     win.on_window_event(move |event| {
-        if let tauri::WindowEvent::CloseRequested { .. } = event {
-            let _ = win_clone.destroy();
+        if matches!(
+            event,
+            tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
+        ) {
+            window_closing_event.store(true, Ordering::SeqCst);
         }
     });
 
-    // Background polling loop for cookie detection & /me validation
-    let win_poll = win.clone();
     let client_poll = client.inner().clone();
     let settings_poll = settings.inner().clone();
     let app_poll = app.clone();
 
     tauri::async_runtime::spawn(async move {
-        log::info!("Starting background cookie polling for oauth-login window...");
+        log::info!("Starting background cookie polling for oauth-login (session_gen={session_gen})");
         let sc_url = match "https://soundcloud.com".parse::<url::Url>() {
             Ok(u) => u,
             Err(e) => {
@@ -714,91 +766,140 @@ pub async fn sc_login(
         };
 
         loop {
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            tokio::time::sleep(Duration::from_millis(500)).await;
 
-            if app_poll.get_webview_window("oauth-login").is_none() {
-                log::info!("oauth-login window was closed. Stopping polling loop.");
+            if LOGIN_SESSION_GEN.load(Ordering::SeqCst) != session_gen
+                || window_closing_poll.load(Ordering::SeqCst)
+            {
+                log::info!("Terminating oauth-login polling task (session_gen={session_gen})");
                 break;
             }
+
+            let Some(live_win) = app_poll.get_webview_window("oauth-login") else {
+                log::info!("oauth-login window was closed. Stopping polling loop (session_gen={session_gen}).");
+                break;
+            };
 
             let mut detected_token: Option<String> = None;
             let mut detected_datadome: Option<String> = None;
 
-            if let Ok(cookies) = win_poll.cookies_for_url(sc_url.clone()) {
-                for c in cookies {
-                    if c.name() == "oauth_token" {
-                        let val = c.value().trim().trim_matches('"');
-                        if !val.is_empty() {
-                            detected_token = Some(val.to_string());
+            match live_win.cookies_for_url(sc_url.clone()) {
+                Ok(cookies) => {
+                    for c in cookies {
+                        if c.name() == "oauth_token" {
+                            let val = c.value().trim().trim_matches('"');
+                            if !val.is_empty() {
+                                detected_token = Some(val.to_string());
+                            }
+                        } else if c.name() == "datadome" {
+                            let val = c.value().trim().trim_matches('"');
+                            if !val.is_empty() {
+                                detected_datadome = Some(val.to_string());
+                            }
                         }
-                    } else if c.name() == "datadome" {
-                        let val = c.value().trim().trim_matches('"');
-                        if !val.is_empty() {
-                            detected_datadome = Some(val.to_string());
+                    }
+                }
+                Err(_) => {
+                    if window_closing_poll.load(Ordering::SeqCst)
+                        || app_poll.get_webview_window("oauth-login").is_none()
+                    {
+                        break;
+                    }
+                }
+            }
+
+            if detected_token.is_none() || detected_datadome.is_none() {
+                if LOGIN_SESSION_GEN.load(Ordering::SeqCst) != session_gen
+                    || window_closing_poll.load(Ordering::SeqCst)
+                {
+                    break;
+                }
+                let Some(live_win_all) = app_poll.get_webview_window("oauth-login") else {
+                    break;
+                };
+                match live_win_all.cookies() {
+                    Ok(cookies) => {
+                        for c in cookies {
+                            if c.name() == "oauth_token" && detected_token.is_none() {
+                                let val = c.value().trim().trim_matches('"');
+                                if !val.is_empty() {
+                                    detected_token = Some(val.to_string());
+                                }
+                            } else if c.name() == "datadome" && detected_datadome.is_none() {
+                                let val = c.value().trim().trim_matches('"');
+                                if !val.is_empty() {
+                                    detected_datadome = Some(val.to_string());
+                                }
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        if window_closing_poll.load(Ordering::SeqCst)
+                            || app_poll.get_webview_window("oauth-login").is_none()
+                        {
+                            break;
                         }
                     }
                 }
             }
 
-            if let Ok(cookies) = win_poll.cookies() {
-                for c in cookies {
-                    if c.name() == "oauth_token" && detected_token.is_none() {
-                        let val = c.value().trim().trim_matches('"');
-                        if !val.is_empty() {
-                            detected_token = Some(val.to_string());
-                        }
-                    } else if c.name() == "datadome" && detected_datadome.is_none() {
-                        let val = c.value().trim().trim_matches('"');
-                        if !val.is_empty() {
-                            detected_datadome = Some(val.to_string());
-                        }
-                    }
-                }
+            if LOGIN_SESSION_GEN.load(Ordering::SeqCst) != session_gen
+                || window_closing_poll.load(Ordering::SeqCst)
+            {
+                break;
             }
 
             if let Some(ref dd) = detected_datadome
                 && let Ok(mut lock) = settings_poll.write()
-                    && lock.datadome_cookie.as_ref() != Some(dd) {
-                        lock.datadome_cookie = Some(dd.clone());
-                        let _ = lock.save(&app_poll);
-                    }
+                && lock.datadome_cookie.as_ref() != Some(dd)
+            {
+                lock.datadome_cookie = Some(dd.clone());
+                let _ = lock.save(&app_poll);
+            }
 
             if let Some(token) = detected_token
-                && token_handled_poll.compare_exchange(false, true, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst).is_ok()
+                && token_handled_poll
+                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
             {
-                log::info!("Detected oauth_token cookie in oauth-login. Verifying via /me API...");
-                    match client_poll.get_me(&token).await {
-                        Ok(user) if user.get("id").is_some() => {
-                            let username = user
-                                .get("username")
-                                .and_then(|u| u.as_str())
-                                .unwrap_or("User");
-                            log::info!("Successfully verified OAuth token for user: {username}. Saving credentials and closing oauth-login.");
-                            client_poll.clear_user_cache();
-                            if let Ok(mut lock) = settings_poll.write() {
-                                lock.oauth_token = Some(token.clone());
-                                let _ = lock.save(&app_poll);
-                            }
-
-                            if let Some(w) = app_poll.get_webview_window("oauth-login") {
-                                let _ = w.destroy();
-                            }
-
-                            let _ = app_poll.emit_to("main", "auth-updated", token);
+                log::info!("Detected oauth_token cookie in oauth-login (session_gen={session_gen}). Verifying via /me API...");
+                match client_poll.get_me(&token).await {
+                    Ok(user) if user.get("id").is_some() => {
+                        if LOGIN_SESSION_GEN.load(Ordering::SeqCst) != session_gen {
+                            log::info!("Discarding verified token from superseded login session (session_gen={session_gen})");
                             break;
                         }
-                        Ok(_) => {
-                            log::warn!("Call to /me succeeded but returned no user ID. Continuing to poll...");
-                            token_handled_poll.store(false, std::sync::atomic::Ordering::SeqCst);
+                        let username = user
+                            .get("username")
+                            .and_then(|u| u.as_str())
+                            .unwrap_or("User");
+                        log::info!("Successfully verified OAuth token for user: {username}. Saving credentials and closing oauth-login.");
+                        client_poll.clear_user_cache();
+                        if let Ok(mut lock) = settings_poll.write() {
+                            lock.oauth_token = Some(token.clone());
+                            let _ = lock.save(&app_poll);
                         }
-                        Err(err) => {
-                            log::warn!("Verification of detected token via /me failed: {err}. Keeping oauth-login open...");
-                            token_handled_poll.store(false, std::sync::atomic::Ordering::SeqCst);
+
+                        window_closing_poll.store(true, Ordering::SeqCst);
+                        if let Some(w) = app_poll.get_webview_window("oauth-login") {
+                            let _ = w.close();
                         }
+
+                        let _ = app_poll.emit_to("main", "auth-updated", token);
+                        break;
+                    }
+                    Ok(_) => {
+                        log::warn!("Call to /me succeeded but returned no user ID. Continuing to poll...");
+                        token_handled_poll.store(false, Ordering::SeqCst);
+                    }
+                    Err(err) => {
+                        log::warn!("Verification of detected token via /me failed: {err}. Keeping oauth-login open...");
+                        token_handled_poll.store(false, Ordering::SeqCst);
                     }
                 }
             }
-        });
+        }
+    });
 
     Ok(())
 }
@@ -818,6 +919,7 @@ pub async fn sc_login_with_token(
     log::info!("sc_login_with_token: validating token via /me...");
     match client.get_me(&clean_token).await {
         Ok(user) if user.get("id").is_some() => {
+            LOGIN_SESSION_GEN.fetch_add(1, Ordering::SeqCst);
             let username = user
                 .get("username")
                 .and_then(|u| u.as_str())
@@ -827,6 +929,9 @@ pub async fn sc_login_with_token(
             if let Ok(mut lock) = settings.write() {
                 lock.oauth_token = Some(clean_token.clone());
                 let _ = lock.save(&app);
+            }
+            if let Some(w) = app.get_webview_window("oauth-login") {
+                let _ = w.close();
             }
             let _ = app.emit_to("main", "auth-updated", clean_token);
             Ok(user)
@@ -855,6 +960,7 @@ pub fn sc_logout(
     client: State<'_, SoundCloudClient>,
     settings: State<'_, Arc<RwLock<AppSettings>>>,
 ) -> Result<(), String> {
+    LOGIN_SESSION_GEN.fetch_add(1, Ordering::SeqCst);
     log::info!("sc_logout requested: clearing session and cookies");
     client.clear_user_cache();
     if let Ok(mut lock) = settings.write() {
@@ -863,16 +969,18 @@ pub fn sc_logout(
     }
     if let Some(w) = app.get_webview_window("oauth-login") {
         let _ = w.clear_all_browsing_data();
-        let _ = w.destroy();
+        let _ = w.close();
     }
-    if let Ok(local_dir) = app.path().app_local_data_dir() {
-        let oauth_dir = local_dir.join("webview2_oauth");
-        if oauth_dir.exists() {
-            let _ = std::fs::remove_dir_all(oauth_dir);
+    if let Ok(local_dir) = app.path().app_local_data_dir()
+        && let Ok(entries) = std::fs::read_dir(&local_dir)
+    {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str()
+                && (name == "webview2_oauth" || name.starts_with("webview2_oauth_"))
+            {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
         }
-    }
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.clear_all_browsing_data();
     }
     let _ = app.emit_to("main", "auth-updated", ());
     Ok(())
@@ -880,6 +988,7 @@ pub fn sc_logout(
 
 #[tauri::command]
 pub async fn sc_get_me(
+    app: AppHandle,
     client: State<'_, SoundCloudClient>,
     settings: State<'_, Arc<RwLock<AppSettings>>>,
 ) -> Result<Option<serde_json::Value>, String> {
@@ -888,12 +997,27 @@ pub async fn sc_get_me(
         lock.oauth_token.clone()
     };
 
-    match token {
-        Some(t) => match client.get_me(&t).await {
-            Ok(val) => Ok(Some(val)),
-            Err(_) => Ok(None),
-        },
-        None => Ok(None),
+    let Some(t) = token else {
+        return Ok(None);
+    };
+
+    match client.get_me_checked(&t).await {
+        Ok(val) => Ok(Some(val)),
+        Err(GetMeError::Unauthorized(reason)) => {
+            log::warn!("SoundCloud /me returned explicit 401 Unauthorized ({reason}); invalidating stored oauth_token");
+            client.clear_user_cache();
+            if let Ok(mut lock) = settings.write()
+                && lock.oauth_token.as_deref() == Some(t.as_str())
+            {
+                lock.oauth_token = None;
+                let _ = lock.save(&app);
+            }
+            Ok(None)
+        }
+        Err(GetMeError::Recoverable(err)) => {
+            log::warn!("Recoverable error during sc_get_me (preserving oauth_token): {err}");
+            Err(err)
+        }
     }
 }
 
@@ -913,16 +1037,26 @@ pub struct ProxyTestDetails {
 #[tauri::command]
 pub async fn test_proxy(
     client: State<'_, SoundCloudClient>,
+    settings: State<'_, Arc<RwLock<AppSettings>>>,
     proxy_url: Option<String>,
 ) -> Result<ProxyTestDetails, String> {
+    let candidate_url = match proxy_url.filter(|u| !u.trim().is_empty()) {
+        Some(u) => u,
+        None => settings
+            .read()
+            .map(|s| s.proxy_url.clone())
+            .unwrap_or_default(),
+    };
+
     let direct_ip = {
         let dc = reqwest::Client::builder()
+            .no_proxy()
             .timeout(Duration::from_secs(5))
             .build()
             .ok();
         if let Some(c) = dc {
             if let Ok(resp) = c.get("https://api.ipify.org").send().await {
-                resp.text().await.ok()
+                resp.text().await.ok().map(|s| s.trim().to_string())
             } else {
                 None
             }
@@ -931,29 +1065,26 @@ pub async fn test_proxy(
         }
     };
 
-    let test_client = if let Some(ref raw_url) = proxy_url {
-        match soundcloud::build_http_client(true, raw_url) {
-            Ok(c) => c,
-            Err(e) => {
-                return Ok(ProxyTestDetails {
-                    success: false,
-                    direct_ip,
-                    exit_ip: None,
-                    country: None,
-                    step1_ip_status: format!("Failed to configure proxy client: {e}"),
-                    step2_resolve_status: "Skipped".to_string(),
-                    step3_media_status: "Skipped".to_string(),
-                    bytes_received: 0,
-                    error: Some(e),
-                });
-            }
+    // Strictly build a fresh client for the candidate proxy; never fall back to saved client or direct connection.
+    let test_client = match soundcloud::build_http_client(true, &candidate_url) {
+        Ok(c) => c,
+        Err(e) => {
+            return Ok(ProxyTestDetails {
+                success: false,
+                direct_ip,
+                exit_ip: None,
+                country: None,
+                step1_ip_status: format!("Invalid proxy configuration: {e}"),
+                step2_resolve_status: "Skipped".to_string(),
+                step3_media_status: "Skipped".to_string(),
+                bytes_received: 0,
+                error: Some(e),
+            });
         }
-    } else {
-        client.client().await
     };
 
     let ip_resp = test_client
-        .get("http://ip-api.com/json")
+        .get("https://api.ipify.org?format=json")
         .timeout(Duration::from_secs(10))
         .send()
         .await;
@@ -971,7 +1102,10 @@ pub async fn test_proxy(
                     step2_resolve_status: "Skipped".to_string(),
                     step3_media_status: "Skipped".to_string(),
                     bytes_received: 0,
-                    error: Some("Proxy authentication failed (HTTP 407). Check credentials.".to_string()),
+                    error: Some(
+                        "Proxy authentication failed (HTTP 407). Check username and password."
+                            .to_string(),
+                    ),
                 });
             }
             if !status.is_success() {
@@ -980,37 +1114,89 @@ pub async fn test_proxy(
                     direct_ip,
                     exit_ip: None,
                     country: None,
-                    step1_ip_status: format!("HTTP {status}"),
+                    step1_ip_status: format!("api.ipify.org returned HTTP {status}"),
                     step2_resolve_status: "Skipped".to_string(),
                     step3_media_status: "Skipped".to_string(),
                     bytes_received: 0,
-                    error: Some(format!("IP query returned HTTP {status}")),
+                    error: Some(format!("Exit IP check returned HTTP {status}")),
                 });
             }
             let json = resp.json::<serde_json::Value>().await.unwrap_or_default();
-            let ip = json.get("query").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-            let c = json.get("country").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-            let code = json.get("countryCode").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            (Some(ip.clone()), Some(format!("{c} ({code})")), format!("HTTP 200 OK (Exit IP: {ip}, Country: {c})"))
+            let ip = json
+                .get("ip")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if ip.is_empty() {
+                return Ok(ProxyTestDetails {
+                    success: false,
+                    direct_ip,
+                    exit_ip: None,
+                    country: None,
+                    step1_ip_status: "Invalid response from api.ipify.org".to_string(),
+                    step2_resolve_status: "Skipped".to_string(),
+                    step3_media_status: "Skipped".to_string(),
+                    bytes_received: 0,
+                    error: Some("api.ipify.org did not return a valid exit IP".to_string()),
+                });
+            }
+
+            let country_opt = match test_client
+                .get(format!("http://ip-api.com/json/{ip}?fields=country,countryCode"))
+                .timeout(Duration::from_secs(5))
+                .send()
+                .await
+            {
+                Ok(c_resp) if c_resp.status().is_success() => {
+                    let cj = c_resp.json::<serde_json::Value>().await.unwrap_or_default();
+                    let cname = cj.get("country").and_then(|v| v.as_str()).unwrap_or("");
+                    let ccode = cj.get("countryCode").and_then(|v| v.as_str()).unwrap_or("");
+                    if !cname.is_empty() {
+                        Some(if ccode.is_empty() {
+                            cname.to_string()
+                        } else {
+                            format!("{cname} ({ccode})")
+                        })
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            let status_text = match &country_opt {
+                Some(c) => format!("HTTP 200 OK via HTTPS (Exit IP: {ip}, {c})"),
+                None => format!("HTTP 200 OK via HTTPS (Exit IP: {ip})"),
+            };
+            (Some(ip), country_opt, status_text)
         }
         Err(e) => {
+            let err_str = e.to_string();
+            let friendly = if err_str.contains("407") {
+                "Proxy authentication failed (HTTP 407). Check username and password.".to_string()
+            } else if e.is_timeout() {
+                format!("Proxy connection timed out contacting api.ipify.org: {err_str}")
+            } else {
+                format!("Failed to connect through proxy: {err_str}")
+            };
             return Ok(ProxyTestDetails {
                 success: false,
                 direct_ip,
                 exit_ip: None,
                 country: None,
-                step1_ip_status: format!("Connection failed: {e}"),
+                step1_ip_status: format!("Connection failed: {friendly}"),
                 step2_resolve_status: "Skipped".to_string(),
                 step3_media_status: "Skipped".to_string(),
                 bytes_received: 0,
-                error: Some(format!("Failed to connect via proxy: {e}")),
+                error: Some(friendly),
             });
         }
     };
 
-    let test_track_id = 2401939686u64;
-    let res = match client.resolve_stream(test_track_id, None).await {
-        Ok(r) => r,
+    let (protocol, raw_stream_url) = match client.resolve_stream_for_proxy_test(&test_client).await
+    {
+        Ok(pair) => pair,
         Err(e) => {
             return Ok(ProxyTestDetails {
                 success: false,
@@ -1018,39 +1204,48 @@ pub async fn test_proxy(
                 exit_ip,
                 country,
                 step1_ip_status: step1_status,
-                step2_resolve_status: format!("Resolution failed: {e}"),
+                step2_resolve_status: format!("SoundCloud API/resolve failed: {e}"),
                 step3_media_status: "Skipped".to_string(),
                 bytes_received: 0,
-                error: Some(format!("Stream resolution failed: {e}")),
+                error: Some(format!("SoundCloud API stream resolution failed: {e}")),
             });
         }
     };
-    let step2_status = format!("HTTP 200 OK (Protocol: {}, stream URL resolved)", res.protocol);
+    let step2_status = format!("HTTP 200 OK (Protocol: {protocol}, stream URL resolved via candidate proxy)");
 
-    let media_resp = if res.stream_url.starts_with("http://127.0.0.1") {
-        reqwest::Client::new()
-            .get(&res.stream_url)
-            .header("Range", "bytes=0-1023")
-            .timeout(Duration::from_secs(10))
-            .send()
-            .await
-    } else {
-        test_client
-            .get(&res.stream_url)
-            .header("Range", "bytes=0-1023")
-            .header("User-Agent", soundcloud::CHROME_USER_AGENT)
-            .timeout(Duration::from_secs(10))
-            .send()
-            .await
-    };
+    let media_resp = test_client
+        .get(&raw_stream_url)
+        .header("Range", "bytes=0-1023")
+        .header("User-Agent", soundcloud::CHROME_USER_AGENT)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await;
 
     match media_resp {
         Ok(resp) => {
             let status = resp.status();
+            if status == reqwest::StatusCode::PROXY_AUTHENTICATION_REQUIRED {
+                return Ok(ProxyTestDetails {
+                    success: false,
+                    direct_ip,
+                    exit_ip,
+                    country,
+                    step1_ip_status: step1_status,
+                    step2_resolve_status: step2_status,
+                    step3_media_status: "HTTP 407 Proxy Authentication Required".to_string(),
+                    bytes_received: 0,
+                    error: Some("Proxy authentication failed during media fetch (HTTP 407)".to_string()),
+                });
+            }
             let bytes = resp.bytes().await.unwrap_or_default();
             let byte_count = bytes.len();
-            let step3_status = format!("HTTP {} ({} bytes received via relay/proxy)", status.as_u16(), byte_count);
-            let ok = (status.is_success() || status == reqwest::StatusCode::PARTIAL_CONTENT) && byte_count > 0;
+            let step3_status = format!(
+                "HTTP {} ({} bytes received via candidate proxy)",
+                status.as_u16(),
+                byte_count
+            );
+            let ok = (status.is_success() || status == reqwest::StatusCode::PARTIAL_CONTENT)
+                && byte_count > 0;
             Ok(ProxyTestDetails {
                 success: ok,
                 direct_ip,
@@ -1060,22 +1255,28 @@ pub async fn test_proxy(
                 step2_resolve_status: step2_status,
                 step3_media_status: step3_status,
                 bytes_received: byte_count,
-                error: if ok { None } else { Some("Received 0 bytes from media fetch".to_string()) },
+                error: if ok {
+                    None
+                } else {
+                    Some(format!(
+                        "Media CDN returned HTTP {} with {} bytes",
+                        status.as_u16(),
+                        byte_count
+                    ))
+                },
             })
         }
-        Err(e) => {
-            Ok(ProxyTestDetails {
-                success: false,
-                direct_ip,
-                exit_ip,
-                country,
-                step1_ip_status: step1_status,
-                step2_resolve_status: step2_status,
-                step3_media_status: format!("Fetch error: {e}"),
-                bytes_received: 0,
-                error: Some(format!("Media byte fetch failed: {e}")),
-            })
-        }
+        Err(e) => Ok(ProxyTestDetails {
+            success: false,
+            direct_ip,
+            exit_ip,
+            country,
+            step1_ip_status: step1_status,
+            step2_resolve_status: step2_status,
+            step3_media_status: format!("Fetch error: {e}"),
+            bytes_received: 0,
+            error: Some(format!("Media byte fetch failed via candidate proxy: {e}")),
+        }),
     }
 }
 

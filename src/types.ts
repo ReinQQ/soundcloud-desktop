@@ -2,8 +2,6 @@ export interface AppSettings {
   proxy_enabled: boolean;
   proxy_url: string;
   discord_rpc_enabled: boolean;
-  discord_app_id: string;
-  adblock_enabled: boolean;
   dark_theme_enabled: boolean;
   minimize_to_tray: boolean;
   proxy_active: boolean;

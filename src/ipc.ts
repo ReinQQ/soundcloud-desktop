@@ -28,10 +28,6 @@ export async function windowAction(action: 'minimize' | 'maximize' | 'unmaximize
   return invoke('window_action', { action });
 }
 
-export async function restartApp(): Promise<void> {
-  return invoke('restart_app');
-}
-
 export async function checkUpdate(): Promise<UpdateCheckResponse> {
   return invoke<UpdateCheckResponse>('check_update');
 }
@@ -78,10 +74,6 @@ export async function scGetLibrary(userId?: number): Promise<LibraryResponse> {
 
 export async function scGetPlaylist(idOrUrn: number | string): Promise<Playlist> {
   return invoke<Playlist>('sc_get_playlist', { idOrUrn: String(idOrUrn) });
-}
-
-export async function scGetTrack(id: number): Promise<Track> {
-  return invoke<Track>('sc_get_track', { id });
 }
 
 export async function scToggleLike(trackId: number, liked: boolean): Promise<boolean> {

@@ -1,4 +1,4 @@
-# SoundCloud Desktop (`v0.2.0`)
+# SoundCloud Desktop (`v0.2.1`)
 
 Standalone native desktop client for SoundCloud built with **Tauri v2**, **Rust** (`api-v2.soundcloud.com`, `ProxyBridge`, `MediaRelay`, Discord Rich Presence), and **Vite + Vanilla TypeScript + `hls.js`** (`src/` -> `dist/`).
 
@@ -7,7 +7,7 @@ Standalone native desktop client for SoundCloud built with **Tauri v2**, **Rust*
 - **Backend (Rust / Tauri v2):** Communicates directly with SoundCloud API v2 (`api-v2.soundcloud.com`), caches extracted `client_id` values across launches, relays media segments and Widevine manifests via local `MediaRelay`, tunnels authenticated `HTTP`/`HTTPS`/`SOCKS4`/`SOCKS5` proxies through local loopback `ProxyBridge`, drives Discord Rich Presence over local IPC, and manages tray controls, settings, and signed updates.
 - **Frontend (Vite / Vanilla TypeScript / `hls.js`):** Renders native views in `src/` with browser history navigation (`pushState` / mouse Back & Forward), HTML5 `<audio>` + `hls.js` stream playback, real-time active equalizer indicators, and local like/queue state.
 
-## Key Features (`v0.2.0`)
+## Key Features (`v0.2.1`)
 
 - **Playback & Media Pipeline:** Direct stream resolution with cached `client_id` and OAuth fallback, progressive MP3 and HLS streaming via `hls.js` / HTML5 `<audio>` (including Widevine DRM playback and `MediaRelay`), interactive queue drawer, shuffle/repeat modes, and volume popup control.
 - **Navigation & Views:**
@@ -56,4 +56,4 @@ npm run build
 npx tauri build
 ```
 
-Pushing a version tag (for example `v0.2.0`) triggers [`.github/workflows/release.yml`](.github/workflows/release.yml) to build the Windows NSIS installer, generate cryptographic updater signatures, and publish `latest.json` alongside release artifacts on GitHub Releases.
+Pushing a version tag (for example `v0.2.1`) triggers [`.github/workflows/release.yml`](.github/workflows/release.yml) to build the Windows NSIS installer, generate cryptographic updater signatures, and publish `latest.json` alongside release artifacts on GitHub Releases.

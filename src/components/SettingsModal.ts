@@ -1,15 +1,7 @@
 import { getSettings, saveSettings, checkUpdate, installUpdate, testProxy, scLogin, scLoginWithToken, scLogout, scGetMe, onAuthUpdated } from '../ipc.ts';
 import { LikesStore } from '../state/LikesStore.ts';
+import { escapeHtml, soundcloudCloudSvg } from '../utils/format.ts';
 import type { AppSettings, UpdateCheckResponse, User } from '../types.ts';
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 
 export class SettingsModal {
   private element: HTMLElement;
@@ -18,6 +10,8 @@ export class SettingsModal {
   private authCheckError: string | null = null;
   private isOpen: boolean = false;
   private selectedProtocol: string = 'socks5';
+  private refreshSeq: number = 0;
+  private lastUpdateInfo: UpdateCheckResponse | null = null;
   private onSettingsUpdated: (settings: AppSettings) => void;
 
   constructor(onSettingsUpdated: (settings: AppSettings) => void) {
@@ -40,13 +34,20 @@ export class SettingsModal {
   }
 
   private async refreshState(): Promise<void> {
-    this.settings = await getSettings();
+    const seq = ++this.refreshSeq;
+    const nextSettings = await getSettings();
+    let nextUser = this.currentUser;
+    let nextErr: string | null = null;
     try {
-      this.currentUser = await scGetMe();
-      this.authCheckError = null;
+      nextUser = await scGetMe();
+      nextErr = null;
     } catch (err: unknown) {
-      this.authCheckError = err instanceof Error ? err.message : String(err);
+      nextErr = err instanceof Error ? err.message : String(err);
     }
+    if (seq !== this.refreshSeq) return;
+    this.settings = nextSettings;
+    this.currentUser = nextUser;
+    this.authCheckError = nextErr;
     this.parseProxyProtocol();
   }
 
@@ -56,6 +57,7 @@ export class SettingsModal {
       this.render();
       this.isOpen = true;
       this.element.classList.add('open');
+      this.runUpdateCheck();
     } catch (err) {
       console.error('Failed to load settings:', err);
     }
@@ -85,7 +87,7 @@ export class SettingsModal {
     const url = this.settings.proxy_url.toLowerCase();
     if (url.startsWith('http://')) this.selectedProtocol = 'http';
     else if (url.startsWith('https://')) this.selectedProtocol = 'https';
-    else if (url.startsWith('socks4://')) this.selectedProtocol = 'socks4';
+    else if (url.startsWith('socks4://') || url.startsWith('socks4a://')) this.selectedProtocol = 'socks4';
     else this.selectedProtocol = 'socks5';
   }
 
@@ -130,9 +132,7 @@ export class SettingsModal {
       <div style="display: flex; flex-direction: column; gap: 10px;">
         <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
           <button class="btn-primary" id="modal-btn-signin" style="padding: 0 16px; height: 34px; font-size: 13px; display: inline-flex; align-items: center; gap: 6px;">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="#ffffff" style="flex-shrink: 0;">
-              <path d="M23.999 14.165c-.052 1.796-1.612 3.169-3.4 3.169h-8.18a.68.68 0 0 1-.675-.683V7.862a.747.747 0 0 1 .452-.724s.75-.513 2.333-.513a5.364 5.364 0 0 1 2.763.755 5.433 5.433 0 0 1 2.57 3.54c.282-.08.574-.121.868-.12.884 0 1.73.358 2.347.992s.948 1.49.922 2.373ZM10.721 8.421c.247 2.98.427 5.697 0 8.672a.264.264 0 0 1-.53 0c-.395-2.946-.22-5.718 0-8.672a.264.264 0 0 1 .53 0ZM9.072 9.448c.285 2.659.37 4.986-.006 7.655a.277.277 0 0 1-.55 0c-.331-2.63-.256-5.02 0-7.655a.277.277 0 0 1 .556 0Zm-1.663-.257c.27 2.726.39 5.171 0 7.904a.266.266 0 0 1-.532 0c-.38-2.69-.257-5.21 0-7.904a.266.266 0 0 1 .532 0Zm-1.647.77a26.108 26.108 0 0 1-.008 7.147.272.272 0 0 1-.542 0 27.955 27.955 0 0 1 0-7.147.275.275 0 0 1 .55 0Zm-1.67 1.769c.421 1.865.228 3.5-.029 5.388a.257.257 0 0 1-.514 0c-.21-1.858-.398-3.549 0-5.389a.272.272 0 0 1 .543 0Zm-1.655-.273c.388 1.897.26 3.508-.01 5.412-.026.28-.514.283-.54 0-.244-1.878-.347-3.54-.01-5.412a.283.283 0 0 1 .56 0Zm-1.668.911c.4 1.268.257 2.292-.026 3.572a.257.257 0 0 1-.514 0c-.241-1.262-.354-2.312-.023-3.572a.283.283 0 0 1 .563 0Z"/>
-            </svg>
+            ${soundcloudCloudSvg(18, '#ffffff')}
             <span>Sign In</span>
           </button>
           <span style="font-size: 12px; color: var(--text-tertiary);">Or paste oauth_token:</span>
@@ -252,7 +252,9 @@ export class SettingsModal {
     `;
 
     this.bindEvents();
-    this.runUpdateCheck();
+    if (this.lastUpdateInfo) {
+      this.applyUpdateUi(this.lastUpdateInfo);
+    }
   }
 
   private bindEvents(): void {
@@ -268,14 +270,17 @@ export class SettingsModal {
       scLogin().catch(err => console.error('Sign in error:', err));
     });
 
-    const retryAuthBtn = this.element.querySelector('#modal-btn-retry-auth');
+    const retryAuthBtn = this.element.querySelector<HTMLButtonElement>('#modal-btn-retry-auth');
     retryAuthBtn?.addEventListener('click', async () => {
+      retryAuthBtn.disabled = true;
+      retryAuthBtn.textContent = 'Checking...';
       await this.refreshState();
       this.render();
     });
 
     const signOutBtn = this.element.querySelector('#modal-btn-signout');
     signOutBtn?.addEventListener('click', async () => {
+      this.refreshSeq++;
       await scLogout();
       LikesStore.getInstance().clear();
       this.currentUser = null;
@@ -309,7 +314,9 @@ export class SettingsModal {
 
       try {
         const user = await scLoginWithToken(rawToken);
+        this.refreshSeq++;
         this.currentUser = user;
+        this.authCheckError = null;
         this.settings = await getSettings();
         this.render();
         this.onSettingsUpdated(this.settings);
@@ -440,7 +447,16 @@ export class SettingsModal {
     saveBtn?.addEventListener('click', async () => {
       if (!this.settings) return;
       const proxyEnabled = this.element.querySelector<HTMLInputElement>('#setting-proxy-enabled')?.checked || false;
-      const proxyAddress = this.element.querySelector<HTMLInputElement>('#setting-proxy-address')?.value.trim() || '127.0.0.1:10808';
+      const rawAddress = this.element.querySelector<HTMLInputElement>('#setting-proxy-address')?.value.trim() || '';
+      if (proxyEnabled && !rawAddress) {
+        if (proxyStatusEl) {
+          proxyStatusEl.style.display = 'block';
+          proxyStatusEl.style.color = '#ef4444';
+          proxyStatusEl.textContent = 'Save Blocked: Proxy address cannot be empty when Proxy is enabled.';
+        }
+        return;
+      }
+      const proxyAddress = rawAddress || '127.0.0.1:10808';
       const strippedAddr = proxyAddress.replace(/^[a-z0-9]+:\/\//i, '');
       const lastAt = strippedAddr.lastIndexOf('@');
 
@@ -474,7 +490,7 @@ export class SettingsModal {
         if (saveBtn) {
           saveBtn.textContent = 'Saved!';
           setTimeout(() => {
-            if (saveBtn) {
+            if (saveBtn.isConnected) {
               saveBtn.disabled = false;
               saveBtn.textContent = 'Save';
             }
@@ -495,30 +511,41 @@ export class SettingsModal {
     });
   }
 
-  private async runUpdateCheck(manual: boolean = false): Promise<void> {
+  private applyUpdateUi(res: UpdateCheckResponse): void {
     const statusEl = this.element.querySelector('#setting-update-status');
     const checkBtn = this.element.querySelector<HTMLButtonElement>('#btn-check-updates');
+    if (!statusEl) return;
+
+    if (res.available && res.version) {
+      statusEl.textContent = `New version v${res.version} is available!`;
+      if (checkBtn) {
+        checkBtn.textContent = 'Install & Restart';
+        checkBtn.onclick = async () => {
+          statusEl.textContent = 'Downloading update...';
+          checkBtn.disabled = true;
+          try {
+            await installUpdate();
+          } catch (err) {
+            statusEl.textContent = `Update install failed: ${err instanceof Error ? err.message : String(err)}`;
+            checkBtn.disabled = false;
+          }
+        };
+      }
+    } else {
+      statusEl.textContent = `You are on the latest version (v${res.current_version}).`;
+    }
+  }
+
+  private async runUpdateCheck(manual: boolean = false): Promise<void> {
+    const statusEl = this.element.querySelector('#setting-update-status');
     if (manual && statusEl) statusEl.textContent = 'Checking for updates...';
 
     try {
       const res: UpdateCheckResponse = await checkUpdate();
-      if (!statusEl) return;
-
-      if (res.available && res.version) {
-        statusEl.textContent = `New version v${res.version} is available!`;
-        if (checkBtn) {
-          checkBtn.textContent = 'Install & Restart';
-          checkBtn.onclick = async () => {
-            statusEl.textContent = 'Downloading update...';
-            checkBtn.disabled = true;
-            await installUpdate();
-          };
-        }
-      } else {
-        statusEl.textContent = `You are on the latest version (v${res.current_version}).`;
-      }
-    } catch (e) {
-      if (statusEl) statusEl.textContent = `Update check failed.`;
+      this.lastUpdateInfo = res;
+      this.applyUpdateUi(res);
+    } catch {
+      if (statusEl) statusEl.textContent = 'Update check failed.';
     }
   }
 }

@@ -30,7 +30,106 @@ pub struct WebviewProxyEndpoint(pub Arc<std::sync::RwLock<Option<String>>>);
 #[derive(Clone)]
 pub struct ProxyBridgeState(pub Arc<tokio::sync::RwLock<Option<Arc<proxy_bridge::ProxyBridge>>>>);
 
+pub fn close_oauth_windows(app: &tauri::AppHandle) {
+    let labels: Vec<String> = app
+        .webview_windows()
+        .keys()
+        .filter(|label| *label == "oauth-login" || label.starts_with("oauth-popup-"))
+        .cloned()
+        .collect();
+    for label in labels {
+        if let Some(w) = app.get_webview_window(&label) {
+            let _ = w.close();
+        }
+    }
+}
+
+pub fn cleanup_stale_webview_dirs(app: &tauri::AppHandle, include_dd: bool) {
+    let Ok(local_data_dir) = app.path().app_local_data_dir() else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(&local_data_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if let Some(name) = entry.file_name().to_str() {
+            let is_oauth = name == "webview2_oauth" || name.starts_with("webview2_oauth_");
+            let is_dd = include_dd && (name == "webview2_dd" || name.starts_with("webview2_dd_"));
+            if is_oauth || is_dd {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+}
+
+pub async fn sync_proxy_bridge(
+    app: &tauri::AppHandle,
+    proxy_enabled: bool,
+    proxy_url: &str,
+) -> Result<Option<String>, String> {
+    let bridge_state = app
+        .try_state::<ProxyBridgeState>()
+        .ok_or_else(|| "ProxyBridgeState not initialized".to_string())?;
+    let endpoint_state = app
+        .try_state::<WebviewProxyEndpoint>()
+        .ok_or_else(|| "WebviewProxyEndpoint not initialized".to_string())?;
+
+    let mut b_guard = bridge_state.0.write().await;
+
+    if !proxy_enabled {
+        if let Some(old) = b_guard.take() {
+            old.shutdown();
+        }
+        if let Ok(mut ep_guard) = endpoint_state.0.write() {
+            *ep_guard = None;
+        }
+        return Ok(None);
+    }
+
+    let parsed = settings::validate_proxy_url(proxy_url)?;
+    let parsed_str = parsed.as_str().trim_end_matches('/');
+    let reuse_existing = match *b_guard {
+        Some(ref existing) => {
+            existing.is_alive() && existing.upstream_url.trim_end_matches('/') == parsed_str
+        }
+        None => false,
+    };
+
+    if reuse_existing && let Some(ref existing) = *b_guard {
+        let ep = existing.local_http_str();
+        if let Ok(mut ep_guard) = endpoint_state.0.write() {
+            *ep_guard = Some(ep.clone());
+        }
+        return Ok(Some(ep));
+    }
+
+    if let Some(old) = b_guard.take() {
+        old.shutdown();
+    }
+
+    match proxy_bridge::ProxyBridge::start(parsed).await {
+        Ok(started) => {
+            let ep = started.local_http_str();
+            if let Ok(mut ep_guard) = endpoint_state.0.write() {
+                *ep_guard = Some(ep.clone());
+            }
+            *b_guard = Some(started);
+            Ok(Some(ep))
+        }
+        Err(e) => {
+            if let Ok(mut ep_guard) = endpoint_state.0.write() {
+                *ep_guard = None;
+            }
+            Err(e)
+        }
+    }
+}
+
 fn shutdown_network_services(app: &tauri::AppHandle) {
+    close_oauth_windows(app);
+    if let Some(w) = app.get_webview_window("dd-refresh") {
+        let _ = w.destroy();
+    }
     if let Some(bridge_state) = app.try_state::<ProxyBridgeState>() {
         tauri::async_runtime::block_on(async {
             let mut bridge = bridge_state.0.write().await;
@@ -42,6 +141,7 @@ fn shutdown_network_services(app: &tauri::AppHandle) {
     if let Some(client) = app.try_state::<SoundCloudClient>() {
         tauri::async_runtime::block_on(client.shutdown());
     }
+    cleanup_stale_webview_dirs(app, true);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -69,8 +169,8 @@ pub fn run() {
                     .build(),
             );
 
-            let _ = app.handle().plugin(tauri_plugin_process::init());
             let _ = app.handle().plugin(tauri_plugin_updater::Builder::new().build());
+            cleanup_stale_webview_dirs(app.handle(), true);
 
             let mut initial_settings = AppSettings::load_or_default(app.handle());
             let mut proxy_bridge_handle: Option<Arc<proxy_bridge::ProxyBridge>> = None;
@@ -248,6 +348,10 @@ pub fn run() {
                     "quit" => {
                         let app_handle = app.clone();
                         tauri::async_runtime::spawn(async move {
+                            close_oauth_windows(&app_handle);
+                            if let Some(w) = app_handle.get_webview_window("dd-refresh") {
+                                let _ = w.destroy();
+                            }
                             if let Some(bridge_state) = app_handle.try_state::<ProxyBridgeState>() {
                                 let mut bridge = bridge_state.0.write().await;
                                 if let Some(b) = bridge.take() {
@@ -257,6 +361,7 @@ pub fn run() {
                             if let Some(client) = app_handle.try_state::<SoundCloudClient>() {
                                 client.shutdown().await;
                             }
+                            cleanup_stale_webview_dirs(&app_handle, true);
                             app_handle.exit(0);
                         });
                     }

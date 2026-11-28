@@ -4,15 +4,11 @@ import { LikesStore } from '../state/LikesStore.ts';
 import { AppNavigator } from '../state/AppNavigator.ts';
 import {
   createTrackRow,
-  HEART_ICON,
-  ROW_PLAY_ICON,
-  ROW_PAUSE_ICON,
+  syncCardPlayButtons,
+  syncTrackRowStates,
 } from '../components/TrackRow.ts';
+import { CARD_PLAY_ICON, CARD_SPINNER_ICON, escapeHtml } from '../utils/format.ts';
 import type { Track, Playlist, User } from '../types.ts';
-
-const PLAY_ICON = `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg>`;
-const PAUSE_ICON = `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
-const SPINNER_ICON = `<svg class="spinner" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle><path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor"></path></svg>`;
 
 export class SearchView {
   private element: HTMLElement;
@@ -100,7 +96,7 @@ export class SearchView {
 
     try {
       const data = await scSearch(this.query, 'all');
-      if (seq !== this.searchSeq) return;
+      if (this.destroyed || seq !== this.searchSeq) return;
       this.results = {
         tracks: data.tracks || [],
         playlists: data.playlists || [],
@@ -108,9 +104,9 @@ export class SearchView {
       };
       this.renderTabContent();
     } catch (err) {
-      if (seq !== this.searchSeq) return;
+      if (this.destroyed || seq !== this.searchSeq) return;
       if (contentArea) {
-        contentArea.innerHTML = `<div style="padding: 24px; color: var(--text-secondary);">Search error: ${String(err)}</div>`;
+        contentArea.innerHTML = `<div style="padding: 24px; color: var(--text-secondary);">Search error: ${escapeHtml(String(err))}</div>`;
       }
     }
   }
@@ -190,7 +186,7 @@ export class SearchView {
     if (this.activeTab === 'all') {
       const hasAny = this.results.tracks.length > 0 || this.results.playlists.length > 0 || this.results.users.length > 0;
       if (!hasAny) {
-        contentArea.innerHTML = `<div style="color: var(--text-tertiary); padding: 16px;">No results found for "${this.query}"</div>`;
+        contentArea.innerHTML = `<div style="color: var(--text-tertiary); padding: 16px;">No results found for "${escapeHtml(this.query)}"</div>`;
         return;
       }
 
@@ -270,15 +266,19 @@ export class SearchView {
 
       const card = document.createElement('div');
       card.className = 'card-item';
+      const safeTitle = escapeHtml(title);
+      const safeAuthor = escapeHtml(author);
+      const safeCover = escapeHtml(cover);
+      const safeKey = escapeHtml(collectionKey);
       card.innerHTML = `
         <div class="card-cover-wrapper">
-          <img class="card-cover-img" src="${cover}" alt="${title}" loading="lazy" decoding="async" />
-          <div class="card-play-hover-btn" data-kind="playlist" data-id="${collectionKey}" title="Play playlist">
-            ${PLAY_ICON}
+          <img class="card-cover-img" src="${safeCover}" alt="${safeTitle}" loading="lazy" decoding="async" />
+          <div class="card-play-hover-btn" data-kind="playlist" data-id="${safeKey}" title="Play playlist">
+            ${CARD_PLAY_ICON}
           </div>
         </div>
-        <div class="card-title" title="${title}">${title}</div>
-        <div class="card-author ${authorId ? 'clickable-link' : ''}" title="${author}">${author} &bull; ${pl.track_count || 0} tracks</div>
+        <div class="card-title" title="${safeTitle}">${safeTitle}</div>
+        <div class="card-author ${authorId ? 'clickable-link' : ''}" title="${safeAuthor}">${safeAuthor} &bull; ${pl.track_count || 0} tracks</div>
       `;
 
       if (authorId) {
@@ -295,7 +295,7 @@ export class SearchView {
         if (this.engine.currentCollectionId !== null && String(this.engine.currentCollectionId) === collectionKey) {
           this.engine.togglePlay();
         } else {
-          playBtn.innerHTML = SPINNER_ICON;
+          playBtn.innerHTML = CARD_SPINNER_ICON;
           try {
             let tracks: Track[] = [];
             if (Array.isArray(pl.tracks) && pl.tracks.length > 0 && pl.tracks[0]?.media?.transcodings?.length) {
@@ -341,11 +341,13 @@ export class SearchView {
       card.className = 'card-item';
       card.style.alignItems = 'center';
       card.style.textAlign = 'center';
+      const safeName = escapeHtml(name);
+      const safeAvatar = escapeHtml(avatar);
       card.innerHTML = `
         <div class="card-cover-wrapper" style="border-radius: 50%; width: 120px; height: 120px; margin: 0 auto 12px;">
-          <img class="card-cover-img" src="${avatar}" alt="${name}" loading="lazy" decoding="async" style="border-radius: 50%;" />
+          <img class="card-cover-img" src="${safeAvatar}" alt="${safeName}" loading="lazy" decoding="async" style="border-radius: 50%;" />
         </div>
-        <div class="card-title" title="${name}" style="text-align: center; width: 100%;">${name}</div>
+        <div class="card-title" title="${safeName}" style="text-align: center; width: 100%;">${safeName}</div>
         <div class="card-author" style="text-align: center;">${user.followers_count !== undefined ? `${user.followers_count.toLocaleString()} followers` : 'Artist'}</div>
       `;
 
@@ -366,48 +368,11 @@ export class SearchView {
   }
 
   private updateLikeButtons(): void {
-    const likeButtons = this.element.querySelectorAll<HTMLElement>('.row-like-btn');
-    likeButtons.forEach((btn) => {
-      const id = Number(btn.dataset.trackId);
-      if (!id) return;
-      const isLiked = this.likesStore.isLiked(id);
-      btn.classList.toggle('liked', isLiked);
-      btn.innerHTML = HEART_ICON(isLiked);
-      btn.title = isLiked ? 'Unlike' : 'Like';
-    });
+    syncTrackRowStates(this.element, this.engine, this.likesStore);
   }
 
   private updatePlayButtons(): void {
-    const cardButtons = this.element.querySelectorAll<HTMLElement>('.card-play-hover-btn');
-    cardButtons.forEach((btn) => {
-      const id = btn.dataset.id;
-      if (!id) return;
-
-      const isPlaying = this.engine.isCollectionPlaying(id);
-      if (isPlaying) {
-        btn.classList.add('playing');
-        btn.innerHTML = PAUSE_ICON;
-      } else {
-        btn.classList.remove('playing');
-        btn.innerHTML = PLAY_ICON;
-      }
-    });
-
-    const rowEls = this.element.querySelectorAll<HTMLElement>('.track-row');
-    rowEls.forEach((row) => {
-      const id = Number(row.dataset.trackId);
-      if (!id) return;
-      const isPlaying = this.engine.isTrackPlaying(id);
-      row.classList.toggle('playing', isPlaying);
-    });
-
-    const rowButtons = this.element.querySelectorAll<HTMLElement>('.row-play-btn');
-    rowButtons.forEach((btn) => {
-      const id = Number(btn.dataset.trackId);
-      if (!id) return;
-
-      const isPlaying = this.engine.isTrackPlaying(id);
-      btn.innerHTML = isPlaying ? ROW_PAUSE_ICON : ROW_PLAY_ICON;
-    });
+    syncCardPlayButtons(this.element, this.engine);
+    syncTrackRowStates(this.element, this.engine);
   }
 }

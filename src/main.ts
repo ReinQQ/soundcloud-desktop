@@ -98,7 +98,12 @@ class App {
     });
 
     this.accountBar = new AccountBar(
-      () => {
+      (user) => {
+        if (user) {
+          LikesStore.getInstance().init(true).catch(() => {});
+        } else {
+          LikesStore.getInstance().clear();
+        }
         this.refreshCurrentView();
       },
       () => {
@@ -138,14 +143,19 @@ class App {
           document.documentElement.classList.remove('sc-dark-theme');
         }
         this.titlebar.updateSettings(settings);
+        if (settings.oauth_token) {
+          LikesStore.getInstance().init().catch(() => {});
+        }
       })
       .catch(() => {});
 
-    LikesStore.getInstance().init().catch(() => {});
-
-    onAuthUpdated(async () => {
+    onAuthUpdated(async (token) => {
       await this.accountBar.refreshUser(false);
-      await LikesStore.getInstance().init(true);
+      if (token && token.trim().length > 0) {
+        await LikesStore.getInstance().init(true);
+      } else {
+        LikesStore.getInstance().clear();
+      }
       this.refreshCurrentView();
     });
   }

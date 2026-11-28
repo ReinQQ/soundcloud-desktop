@@ -1,14 +1,8 @@
 import { AudioEngine } from '../player/AudioEngine.ts';
 import { AppNavigator } from '../state/AppNavigator.ts';
 import { PLAYLIST_ADD_ICON } from './TrackRow.ts';
+import { escapeHtml, formatDuration } from '../utils/format.ts';
 import type { Track } from '../types.ts';
-
-function formatDuration(sec: number): string {
-  if (isNaN(sec) || !isFinite(sec)) return '0:00';
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  return `${m}:${s < 10 ? '0' : ''}${s}`;
-}
 
 export class QueueDrawer {
   private element: HTMLElement;
@@ -87,11 +81,13 @@ export class QueueDrawer {
       const isCurrent = idx === this.engine.queueIndex;
       const row = document.createElement('div');
       row.className = `queue-item-row ${isCurrent ? 'active' : ''}`;
+      const trackTitle = escapeHtml(track.title);
+      const trackArtist = escapeHtml(track.user?.username || '');
       row.innerHTML = `
         <span style="min-width: 20px; color: var(--text-tertiary); font-size: 11px;">${idx + 1}</span>
         <div style="flex: 1; overflow: hidden; display: flex; flex-direction: column; gap: 2px;">
-          <span class="queue-track-title clickable-link" style="font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${track.title}</span>
-          <span class="queue-track-artist ${track.user?.id ? 'clickable-link' : ''}" style="font-size: 11px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${track.user?.username || ''}</span>
+          <span class="queue-track-title clickable-link" style="font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${trackTitle}</span>
+          <span class="queue-track-artist ${track.user?.id ? 'clickable-link' : ''}" style="font-size: 11px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${trackArtist}</span>
         </div>
         <span style="font-size: 11px; color: var(--text-tertiary);">${formatDuration(track.duration ? track.duration / 1000 : 0)}</span>
         <button class="track-row-action-btn queue-add-pl-btn" title="Add to playlist">${PLAYLIST_ADD_ICON}</button>

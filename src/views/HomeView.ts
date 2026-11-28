@@ -2,6 +2,8 @@ import { scGetDiscover, scGetPlaylist } from '../ipc.ts';
 import { AudioEngine, toHighResArtwork, getPlaylistCover } from '../player/AudioEngine.ts';
 import { showToast } from '../components/Toast.ts';
 import { AppNavigator } from '../state/AppNavigator.ts';
+import { syncCardPlayButtons } from '../components/TrackRow.ts';
+import { CARD_PLAY_ICON, CARD_SPINNER_ICON, escapeHtml } from '../utils/format.ts';
 import type { Track, Playlist, DiscoverResponse, MixedSelectionItem } from '../types.ts';
 
 type DiscoverItem = Partial<Track & Playlist> & {
@@ -14,10 +16,6 @@ type DiscoverItem = Partial<Track & Playlist> & {
   computed_artwork_url?: string | null;
   calculated_artwork_url?: string | null;
 };
-
-const PLAY_ICON = `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg>`;
-const PAUSE_ICON = `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
-const SPINNER_ICON = `<svg class="spinner" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle><path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor"></path></svg>`;
 
 export class HomeView {
   private element: HTMLElement;
@@ -89,11 +87,15 @@ export class HomeView {
     } catch (err) {
       if (this.destroyed) return;
       this.element.innerHTML = `
-        <div style="padding: 24px; color: var(--text-secondary);">
+        <div style="padding: 32px; color: var(--text-secondary);">
           <h3>Could not load recommendations</h3>
-          <p style="margin-top: 8px; font-size: 13px; color: var(--text-tertiary);">${String(err)}</p>
+          <p style="margin-top: 8px; margin-bottom: 16px; font-size: 13px; color: var(--text-tertiary);">${escapeHtml(String(err))}</p>
+          <button class="btn-secondary" id="home-btn-retry" style="padding: 8px 18px;">Retry</button>
         </div>
       `;
+      this.element.querySelector('#home-btn-retry')?.addEventListener('click', () => {
+        this.loadData();
+      });
     }
   }
 
@@ -135,8 +137,8 @@ export class HomeView {
       header.className = 'view-section-header';
       header.innerHTML = `
         <div>
-          <h2 class="view-section-title">${sectionTitle}</h2>
-          ${section.description ? `<p class="view-section-subtitle">${section.description}</p>` : ''}
+          <h2 class="view-section-title">${escapeHtml(sectionTitle)}</h2>
+          ${section.description ? `<p class="view-section-subtitle">${escapeHtml(section.description)}</p>` : ''}
         </div>
       `;
       secEl.appendChild(header);
@@ -160,15 +162,19 @@ export class HomeView {
 
         const card = document.createElement('div');
         card.className = 'card-item';
+        const safeTitle = escapeHtml(title);
+        const safeAuthor = escapeHtml(author);
+        const safeCover = escapeHtml(cover);
+        const safeBtnId = escapeHtml(btnDataId);
         card.innerHTML = `
           <div class="card-cover-wrapper">
-            <img class="card-cover-img" src="${cover}" alt="${title}" loading="lazy" decoding="async" />
-            <div class="card-play-hover-btn" data-kind="${isTrack ? 'track' : 'playlist'}" data-id="${btnDataId}" title="${isTrack ? 'Play track' : 'Play playlist'}">
-              ${PLAY_ICON}
+            <img class="card-cover-img" src="${safeCover}" alt="${safeTitle}" loading="lazy" decoding="async" />
+            <div class="card-play-hover-btn" data-kind="${isTrack ? 'track' : 'playlist'}" data-id="${safeBtnId}" title="${isTrack ? 'Play track' : 'Play playlist'}">
+              ${CARD_PLAY_ICON}
             </div>
           </div>
-          <div class="card-title ${isTrack && item.id ? 'clickable-link' : ''}" title="${title}">${title}</div>
-          <div class="card-author ${authorId ? 'clickable-link' : ''}" title="${author}">${author}</div>
+          <div class="card-title ${isTrack && item.id ? 'clickable-link' : ''}" title="${safeTitle}">${safeTitle}</div>
+          <div class="card-author ${authorId ? 'clickable-link' : ''}" title="${safeAuthor}">${safeAuthor}</div>
         `;
 
         if (isTrack && item.id) {
@@ -199,7 +205,7 @@ export class HomeView {
             if (collectionKey && this.engine.currentCollectionId !== null && String(this.engine.currentCollectionId) === collectionKey) {
               this.engine.togglePlay();
             } else {
-              playBtn.innerHTML = SPINNER_ICON;
+              playBtn.innerHTML = CARD_SPINNER_ICON;
               try {
                 let tracks: Track[] = [];
                 if (collectionKey) {
@@ -256,23 +262,6 @@ export class HomeView {
   }
 
   private updatePlayButtons(): void {
-    const buttons = this.element.querySelectorAll<HTMLElement>('.card-play-hover-btn');
-    buttons.forEach((btn) => {
-      const kind = btn.dataset.kind;
-      const rawId = btn.dataset.id;
-      if (!rawId) return;
-
-      const isPlaying = kind === 'track'
-        ? this.engine.isTrackPlaying(Number(rawId))
-        : this.engine.isCollectionPlaying(rawId);
-
-      if (isPlaying) {
-        btn.classList.add('playing');
-        btn.innerHTML = PAUSE_ICON;
-      } else {
-        btn.classList.remove('playing');
-        btn.innerHTML = PLAY_ICON;
-      }
-    });
+    syncCardPlayButtons(this.element, this.engine);
   }
 }

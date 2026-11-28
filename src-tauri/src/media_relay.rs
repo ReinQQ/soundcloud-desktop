@@ -378,14 +378,25 @@ impl MediaRelayInner {
             req = req
                 .header("Origin", "https://soundcloud.com")
                 .header("Referer", "https://soundcloud.com/");
+            let (stored_oauth, stored_dd) = if let Some(ref s_lock) = self.settings
+                && let Ok(s) = s_lock.read()
+            {
+                (
+                    s.oauth_token.clone().filter(|t| !t.is_empty()),
+                    s.datadome_cookie.clone().filter(|d| !d.is_empty()),
+                )
+            } else {
+                (None, None)
+            };
+
             if let Some(ref auth) = auth_header {
                 req = req.header("Authorization", auth);
-            } else if let Some(ref s_lock) = self.settings
-                && let Ok(s) = s_lock.read()
-                && let Some(ref oauth) = s.oauth_token
-                && !oauth.is_empty()
-            {
+            } else if let Some(oauth) = stored_oauth {
                 req = req.header("Authorization", format!("OAuth {oauth}"));
+            }
+
+            if let Some(dd) = stored_dd {
+                req = req.header("Cookie", format!("datadome={dd}"));
             }
         }
         // Do NOT send Authorization or Origin to *.sndcdn.com or *.soundcloud.cloud CDN media segments.

@@ -1,13 +1,7 @@
 import { AudioEngine, toHighResArtwork } from '../player/AudioEngine.ts';
 import { LikesStore } from '../state/LikesStore.ts';
 import { AppNavigator } from '../state/AppNavigator.ts';
-
-function formatDuration(sec: number): string {
-  if (isNaN(sec) || !isFinite(sec)) return '0:00';
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  return `${m}:${s < 10 ? '0' : ''}${s}`;
-}
+import { formatDuration } from '../utils/format.ts';
 
 export class PlayerDock {
   private element: HTMLElement;
@@ -254,6 +248,10 @@ export class PlayerDock {
       });
 
       window.addEventListener('mouseup', () => {
+        this.isDraggingScrubber = false;
+      });
+
+      window.addEventListener('blur', () => {
         this.isDraggingScrubber = false;
       });
     }

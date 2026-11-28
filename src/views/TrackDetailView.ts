@@ -3,21 +3,13 @@ import { AudioEngine, toHighResArtwork, DEFAULT_COVER_PLACEHOLDER } from '../pla
 import { LikesStore } from '../state/LikesStore.ts';
 import { AppNavigator } from '../state/AppNavigator.ts';
 import { showToast } from '../components/Toast.ts';
-import { HEART_ICON, PLAYLIST_ADD_ICON, formatTrackDuration } from '../components/TrackRow.ts';
+import { HEART_ICON, PLAYLIST_ADD_ICON } from '../components/TrackRow.ts';
+import { escapeHtml, formatDuration } from '../utils/format.ts';
 import type { Track, TrackComment, User } from '../types.ts';
 
 const FALLBACK_AVATAR_SVG = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(
   `<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120"><defs><linearGradient id="ag" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#27272a"/><stop offset="100%" stop-color="#18181b"/></linearGradient></defs><rect width="120" height="120" rx="60" fill="url(#ag)"/><circle cx="60" cy="46" r="18" fill="#ffffff" fill-opacity="0.32"/><path d="M28 98c4-18 18-28 32-28s28 10 32 28" fill="#ffffff" fill-opacity="0.32"/></svg>`
 )}`;
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 
 function resolveAvatarUrl(url?: string | null): string {
   if (!url) return FALLBACK_AVATAR_SVG;
@@ -169,7 +161,7 @@ export class TrackDetailView {
             <span>&bull;</span>
             <span>${(t.reposts_count ?? 0).toLocaleString()} reposts</span>
             <span>&bull;</span>
-            <span>${formatTrackDuration(durationSec)}</span>
+            <span>${formatDuration(durationSec)}</span>
             ${dateStr ? `<span>&bull;</span><span>${escapeHtml(dateStr)}</span>` : ''}
           </div>
 
@@ -272,7 +264,7 @@ export class TrackDetailView {
 
     const avatar = resolveAvatarUrl(this.currentUser.avatar_url);
     const isThisTrackActive = this.engine.currentTrack?.id === this.trackId;
-    const currentFormatted = formatTrackDuration(this.engine.currentTime);
+    const currentFormatted = formatDuration(this.engine.currentTime);
 
     const card = document.createElement('div');
     card.className = 'td-composer-card';
@@ -450,8 +442,8 @@ export class TrackDetailView {
       if (hasTimestamp) {
         const tsPill = document.createElement('span');
         tsPill.className = 'td-timestamp-pill';
-        tsPill.title = `Jump to ${formatTrackDuration(timestampSec)}`;
-        tsPill.textContent = `@ ${formatTrackDuration(timestampSec)}`;
+        tsPill.title = `Jump to ${formatDuration(timestampSec)}`;
+        tsPill.textContent = `@ ${formatDuration(timestampSec)}`;
         tsPill.addEventListener('click', async () => {
           if (!this.track) return;
           if (this.engine.currentTrack?.id === this.track.id) {
@@ -514,7 +506,7 @@ export class TrackDetailView {
 
     const attachBtn = this.element.querySelector<HTMLElement>('#td-attach-time-btn');
     if (attachBtn && this.engine.currentTrack?.id === this.trackId) {
-      attachBtn.textContent = `Attach current time (${formatTrackDuration(this.engine.currentTime)})`;
+      attachBtn.textContent = `Attach current time (${formatDuration(this.engine.currentTime)})`;
     }
   }
 }

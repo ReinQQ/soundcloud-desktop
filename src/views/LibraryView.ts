@@ -4,15 +4,11 @@ import { LikesStore } from '../state/LikesStore.ts';
 import { AppNavigator } from '../state/AppNavigator.ts';
 import {
   createTrackRow,
-  HEART_ICON,
-  ROW_PLAY_ICON,
-  ROW_PAUSE_ICON,
+  syncCardPlayButtons,
+  syncTrackRowStates,
 } from '../components/TrackRow.ts';
+import { CARD_PLAY_ICON, CARD_SPINNER_ICON, escapeHtml } from '../utils/format.ts';
 import type { Track, Playlist, LibraryTrackItem } from '../types.ts';
-
-const PLAY_ICON = `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg>`;
-const PAUSE_ICON = `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
-const SPINNER_ICON = `<svg class="spinner" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle><path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor"></path></svg>`;
 
 export class LibraryView {
   private element: HTMLElement;
@@ -25,6 +21,7 @@ export class LibraryView {
   private unsubscribeAudio: (() => void) | null = null;
   private unsubscribeLikes: (() => void) | null = null;
   private destroyed: boolean = false;
+  private loadSeq: number = 0;
 
   constructor(onOpenPlaylist: (id: number | string) => void, initialTab: 'likes' | 'playlists' = 'likes') {
     this.engine = AudioEngine.getInstance();
@@ -93,32 +90,50 @@ export class LibraryView {
       </div>
     `;
 
+    const seq = ++this.loadSeq;
     try {
       const data = await scGetLibrary();
-      if (this.destroyed) return;
+      if (this.destroyed || seq !== this.loadSeq) return;
       const rawLikes = data.likes || [];
       const tracks: Track[] = rawLikes
         .map((item: LibraryTrackItem) => (item.track || item) as unknown as Track)
         .filter((t: Track) => t && t.id && t.title);
 
-      this.likesStore.setTracks(tracks);
+      this.likesStore.setTracks(tracks, true);
       this.likes = this.likesStore.getLikedTracks();
       this.playlists = data.playlists || [];
       this.render();
     } catch (err) {
-      if (this.destroyed) return;
-      this.element.innerHTML = `
-        <div style="padding: 32px; text-align: center; max-width: 440px; margin: 40px auto; background: var(--bg-card); border-radius: var(--radius-xl); border: var(--border-subtle);">
-          <h3 style="font-size: 18px; margin-bottom: 8px;">Sign in to view your Library</h3>
-          <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 20px;">
-            Access your liked tracks, custom playlists, and listening history in one place.
-          </p>
-          <button class="btn-primary" id="lib-btn-signin" style="padding: 9px 24px;">Sign In</button>
-        </div>
-      `;
-      this.element.querySelector('#lib-btn-signin')?.addEventListener('click', () => {
-        scLogin();
-      });
+      if (this.destroyed || seq !== this.loadSeq) return;
+      const msg = err instanceof Error ? err.message : String(err || 'Unknown error');
+      const isAuthError = /authentication required|session expired|401 unauthorized|not signed in/i.test(msg);
+      if (isAuthError) {
+        this.element.innerHTML = `
+          <div style="padding: 32px; text-align: center; max-width: 440px; margin: 40px auto; background: var(--bg-card); border-radius: var(--radius-xl); border: var(--border-subtle);">
+            <h3 style="font-size: 18px; margin-bottom: 8px;">Sign in to view your Library</h3>
+            <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 20px;">
+              Access your liked tracks, custom playlists, and listening history in one place.
+            </p>
+            <button class="btn-primary" id="lib-btn-signin" style="padding: 9px 24px;">Sign In</button>
+          </div>
+        `;
+        this.element.querySelector('#lib-btn-signin')?.addEventListener('click', () => {
+          scLogin();
+        });
+      } else {
+        this.element.innerHTML = `
+          <div style="padding: 32px; text-align: center; max-width: 440px; margin: 40px auto; background: var(--bg-card); border-radius: var(--radius-xl); border: var(--border-subtle);">
+            <h3 style="font-size: 18px; margin-bottom: 8px;">Could not load your Library</h3>
+            <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 20px;">
+              ${escapeHtml(msg)}
+            </p>
+            <button class="btn-secondary" id="lib-btn-retry" style="padding: 9px 24px;">Retry</button>
+          </div>
+        `;
+        this.element.querySelector('#lib-btn-retry')?.addEventListener('click', () => {
+          this.loadData();
+        });
+      }
     }
   }
 
@@ -194,15 +209,18 @@ export class LibraryView {
 
         const card = document.createElement('div');
         card.className = 'card-item';
+        const safeTitle = escapeHtml(title);
+        const safeAuthor = escapeHtml(author);
+        const safeCover = escapeHtml(cover);
         card.innerHTML = `
           <div class="card-cover-wrapper">
-            <img class="card-cover-img" src="${cover}" alt="${title}" loading="lazy" decoding="async" />
+            <img class="card-cover-img" src="${safeCover}" alt="${safeTitle}" loading="lazy" decoding="async" />
             <div class="card-play-hover-btn" data-kind="playlist" data-id="${pl.id}" title="Play playlist">
-              ${PLAY_ICON}
+              ${CARD_PLAY_ICON}
             </div>
           </div>
-          <div class="card-title" title="${title}">${title}</div>
-          <div class="card-author ${authorId ? 'clickable-link' : ''}" title="${author}">${author} &bull; ${pl.track_count || 0} tracks</div>
+          <div class="card-title" title="${safeTitle}">${safeTitle}</div>
+          <div class="card-author ${authorId ? 'clickable-link' : ''}" title="${safeAuthor}">${safeAuthor} &bull; ${pl.track_count || 0} tracks</div>
         `;
 
         if (authorId) {
@@ -216,10 +234,10 @@ export class LibraryView {
         playBtn?.addEventListener('click', async (e) => {
           e.stopPropagation();
 
-          if (this.engine.currentCollectionId === pl.id) {
+          if (this.engine.currentCollectionId !== null && String(this.engine.currentCollectionId) === String(pl.id)) {
             this.engine.togglePlay();
           } else {
-            playBtn.innerHTML = SPINNER_ICON;
+            playBtn.innerHTML = CARD_SPINNER_ICON;
             try {
               let tracks: Track[] = [];
               if (Array.isArray(pl.tracks) && pl.tracks.length > 0 && pl.tracks[0]?.media?.transcodings?.length) {
@@ -257,48 +275,11 @@ export class LibraryView {
   }
 
   private updateLikeButtons(): void {
-    const likeButtons = this.element.querySelectorAll<HTMLElement>('.row-like-btn');
-    likeButtons.forEach((btn) => {
-      const id = Number(btn.dataset.trackId);
-      if (!id) return;
-      const isLiked = this.likesStore.isLiked(id);
-      btn.classList.toggle('liked', isLiked);
-      btn.innerHTML = HEART_ICON(isLiked);
-      btn.title = isLiked ? 'Unlike' : 'Like';
-    });
+    syncTrackRowStates(this.element, this.engine, this.likesStore);
   }
 
   private updatePlayButtons(): void {
-    const cardButtons = this.element.querySelectorAll<HTMLElement>('.card-play-hover-btn');
-    cardButtons.forEach((btn) => {
-      const id = Number(btn.dataset.id);
-      if (!id) return;
-
-      const isPlaying = this.engine.isCollectionPlaying(id);
-      if (isPlaying) {
-        btn.classList.add('playing');
-        btn.innerHTML = PAUSE_ICON;
-      } else {
-        btn.classList.remove('playing');
-        btn.innerHTML = PLAY_ICON;
-      }
-    });
-
-    const rowEls = this.element.querySelectorAll<HTMLElement>('.track-row');
-    rowEls.forEach((row) => {
-      const id = Number(row.dataset.trackId);
-      if (!id) return;
-      const isPlaying = this.engine.isTrackPlaying(id);
-      row.classList.toggle('playing', isPlaying);
-    });
-
-    const rowButtons = this.element.querySelectorAll<HTMLElement>('.row-play-btn');
-    rowButtons.forEach((btn) => {
-      const id = Number(btn.dataset.trackId);
-      if (!id) return;
-
-      const isPlaying = this.engine.isTrackPlaying(id);
-      btn.innerHTML = isPlaying ? ROW_PAUSE_ICON : ROW_PLAY_ICON;
-    });
+    syncCardPlayButtons(this.element, this.engine);
+    syncTrackRowStates(this.element, this.engine);
   }
 }

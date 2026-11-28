@@ -72,6 +72,7 @@ export class AudioEngine {
   private consecutiveSkipCount: number = 0;
   private playSeq: number = 0;
   private activeMediaSeq: number = 0;
+  private streamRefreshAttemptedSeq: number = 0;
 
   private constructor() {
     this.audio = new Audio();
@@ -190,6 +191,11 @@ export class AudioEngine {
       console.error(msg);
       logFrontendError('error', msg).catch(() => {});
       if (this.currentTrack) {
+        if (this.streamRefreshAttemptedSeq !== seq) {
+          this.streamRefreshAttemptedSeq = seq;
+          this.refreshAndReloadStream(this.currentTrack.id, seq);
+          return;
+        }
         scClearStreamCache(this.currentTrack.id).catch(() => {});
         this.handlePlaybackFailure(this.currentTrack.id, 'Audio element error', seq);
       }
@@ -246,6 +252,18 @@ export class AudioEngine {
     }
     this.audio.pause();
     this.audio.removeAttribute('src');
+
+    const isProxyError =
+      message.includes('HTTP 407') ||
+      message.includes('Proxy authentication failed') ||
+      message.includes('Proxy relay error');
+    if (isProxyError) {
+      showToast('Proxy connection failed. Check proxy settings.');
+      this.isPlaying = false;
+      this.consecutiveSkipCount = 0;
+      this.notify();
+      return;
+    }
 
     const isProtected = message.includes('Protected stream') || message.includes('DRM not supported');
     const isGoPlus = message.toLowerCase().includes('go+');
@@ -411,6 +429,20 @@ export class AudioEngine {
     }
   }
 
+  private async refreshAndReloadStream(trackId: number, seq: number): Promise<void> {
+    try {
+      await scClearStreamCache(trackId).catch(() => {});
+      if (seq !== this.playSeq) return;
+      const fresh: StreamResolution = await scResolveStream(trackId);
+      if (seq !== this.playSeq) return;
+      await this.loadStreamSource(fresh, seq);
+    } catch (err: unknown) {
+      if (seq !== this.playSeq) return;
+      const errMsg = err instanceof Error ? err.message : String(err || 'Stream refresh failed');
+      this.handlePlaybackFailure(trackId, errMsg, seq);
+    }
+  }
+
   private async loadStreamSource(resolution: StreamResolution, seq: number): Promise<void> {
     if (seq !== this.playSeq) {
       return;
@@ -494,8 +526,6 @@ export class AudioEngine {
       let mediaRetryCount = 0;
       const MAX_HLS_RETRIES = 2;
 
-      hls.loadSource(streamUrl);
-      hls.attachMedia(this.audio);
       hls.on(Hls.Events.KEY_LOADED, () => {
         if (seq !== this.playSeq) return;
         logFrontendError('info', `HLS decryption key successfully loaded for track ${this.currentTrack?.id}`).catch(() => {});
@@ -528,7 +558,21 @@ export class AudioEngine {
         if (data.fatal) {
           logFrontendError('error', errDesc).catch(() => {});
           switch (data.type) {
-            case Hls.ErrorTypes.NETWORK_ERROR:
+            case Hls.ErrorTypes.NETWORK_ERROR: {
+              const statusCode = errObj.response?.code;
+              if (
+                (statusCode === 403 || statusCode === 404 || statusCode === 410) &&
+                this.currentTrack &&
+                this.streamRefreshAttemptedSeq !== seq
+              ) {
+                this.streamRefreshAttemptedSeq = seq;
+                const trackId = this.currentTrack.id;
+                console.warn(`HLS HTTP ${statusCode} for track ${trackId}; clearing stream cache and re-resolving...`);
+                hls.destroy();
+                this.hls = null;
+                void this.refreshAndReloadStream(trackId, seq);
+                break;
+              }
               if (networkRetryCount < MAX_HLS_RETRIES) {
                 networkRetryCount++;
                 console.warn(`HLS fatal network error, attempting recovery (attempt ${networkRetryCount}/${MAX_HLS_RETRIES})...`);
@@ -542,6 +586,7 @@ export class AudioEngine {
                 }
               }
               break;
+            }
             case Hls.ErrorTypes.MEDIA_ERROR:
               if (mediaRetryCount < MAX_HLS_RETRIES) {
                 mediaRetryCount++;
@@ -569,6 +614,9 @@ export class AudioEngine {
           logFrontendError('warn', errDesc).catch(() => {});
         }
       });
+
+      hls.loadSource(streamUrl);
+      hls.attachMedia(this.audio);
     } else {
       this.activeMediaSeq = seq;
       this.audio.src = streamUrl;

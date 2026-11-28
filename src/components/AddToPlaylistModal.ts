@@ -1,6 +1,7 @@
 import { scGetMe, scGetLibrary, scAddTrackToPlaylist, scCreatePlaylist } from '../ipc.ts';
 import { getPlaylistCover, toHighResArtwork } from '../player/AudioEngine.ts';
 import { showToast } from './Toast.ts';
+import { escapeHtml } from '../utils/format.ts';
 import type { Playlist, Track } from '../types.ts';
 
 export class AddToPlaylistModal {
@@ -10,6 +11,7 @@ export class AddToPlaylistModal {
   private searchQuery: string = '';
   private showCreateForm: boolean = false;
   private isLoading: boolean = false;
+  private openSeq: number = 0;
 
   constructor() {
     this.element = document.createElement('div');
@@ -41,6 +43,7 @@ export class AddToPlaylistModal {
   }
 
   public async open(track: Track): Promise<void> {
+    const seq = ++this.openSeq;
     this.targetTrack = track;
     this.searchQuery = '';
     this.showCreateForm = false;
@@ -50,6 +53,7 @@ export class AddToPlaylistModal {
 
     try {
       const me = await scGetMe();
+      if (seq !== this.openSeq) return;
       if (!me || !me.id) {
         this.isLoading = false;
         this.renderNotSignedIn();
@@ -57,18 +61,23 @@ export class AddToPlaylistModal {
       }
 
       const lib = await scGetLibrary(me.id);
+      if (seq !== this.openSeq) return;
       const allPlaylists = lib.playlists || [];
       this.playlists = allPlaylists.filter((pl) => pl && (!pl.user?.id || pl.user.id === me.id));
     } catch (err) {
+      if (seq !== this.openSeq) return;
       console.error('Failed to fetch user playlists:', err);
       this.playlists = [];
     } finally {
-      this.isLoading = false;
-      this.renderBody();
+      if (seq === this.openSeq) {
+        this.isLoading = false;
+        this.renderBody();
+      }
     }
   }
 
   public close(): void {
+    this.openSeq++;
     this.element.classList.remove('open');
     this.targetTrack = null;
   }
@@ -94,17 +103,21 @@ export class AddToPlaylistModal {
       pl.title.toLowerCase().includes(this.searchQuery.toLowerCase())
     );
 
+    const safeTitle = escapeHtml(track.title);
+    const safeArtist = escapeHtml(track.user?.username || 'SoundCloud');
+    const safeCover = escapeHtml(trackCover);
+
     body.innerHTML = `
       <div class="atp-track-preview">
-        <img src="${trackCover}" alt="${track.title}" class="atp-track-thumb" />
+        <img src="${safeCover}" alt="${safeTitle}" class="atp-track-thumb" />
         <div style="min-width: 0; flex: 1;">
-          <div style="font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${track.title}</div>
-          <div style="font-size: 11.5px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${track.user?.username || 'SoundCloud'}</div>
+          <div style="font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${safeTitle}</div>
+          <div style="font-size: 11.5px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${safeArtist}</div>
         </div>
       </div>
 
       <div style="display: flex; gap: 8px; align-items: center;">
-        <input type="text" class="settings-input" id="atp-search-input" placeholder="Filter your playlists..." value="${this.searchQuery.replace(/"/g, '&quot;')}" style="flex: 1; height: 34px; font-size: 12.5px;" />
+        <input type="text" class="settings-input" id="atp-search-input" placeholder="Filter your playlists..." value="${escapeHtml(this.searchQuery)}" style="flex: 1; height: 34px; font-size: 12.5px;" />
         <button class="btn-secondary" id="atp-toggle-new" style="height: 34px; padding: 0 12px; font-size: 12px; white-space: nowrap;">+ New Playlist</button>
       </div>
 
@@ -196,13 +209,14 @@ export class AddToPlaylistModal {
         pl.tracks.some((t) => t && t.id === this.targetTrack?.id)
       );
       const cover = getPlaylistCover(pl);
+      const safePlTitle = escapeHtml(pl.title);
 
       const row = document.createElement('div');
       row.className = 'atp-playlist-row';
       row.innerHTML = `
-        <img src="${cover}" alt="${pl.title}" class="atp-pl-thumb" />
+        <img src="${escapeHtml(cover)}" alt="${safePlTitle}" class="atp-pl-thumb" />
         <div style="flex: 1; min-width: 0;">
-          <div style="font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${pl.title}</div>
+          <div style="font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${safePlTitle}</div>
           <div style="font-size: 11.5px; color: var(--text-tertiary);">${pl.track_count ?? pl.tracks?.length ?? 0} tracks</div>
         </div>
         <span class="atp-check-badge" style="color: ${alreadyIn ? 'var(--accent)' : 'var(--text-tertiary)'};">

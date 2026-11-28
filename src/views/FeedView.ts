@@ -3,10 +3,9 @@ import { AudioEngine } from '../player/AudioEngine.ts';
 import { LikesStore } from '../state/LikesStore.ts';
 import {
   createTrackRow,
-  HEART_ICON,
-  ROW_PLAY_ICON,
-  ROW_PAUSE_ICON,
+  syncTrackRowStates,
 } from '../components/TrackRow.ts';
+import { escapeHtml } from '../utils/format.ts';
 import type { Track, StreamResponse, StreamItem } from '../types.ts';
 
 export class FeedView {
@@ -16,6 +15,7 @@ export class FeedView {
   private unsubscribeAudio: (() => void) | null = null;
   private unsubscribeLikes: (() => void) | null = null;
   private destroyed: boolean = false;
+  private loadSeq: number = 0;
 
   constructor() {
     this.engine = AudioEngine.getInstance();
@@ -45,6 +45,7 @@ export class FeedView {
   }
 
   private async loadData(): Promise<void> {
+    const seq = ++this.loadSeq;
     this.element.innerHTML = `
       <div class="view-section-header">
         <div>
@@ -63,22 +64,39 @@ export class FeedView {
 
     try {
       const data = await scGetStream();
-      if (this.destroyed) return;
+      if (this.destroyed || seq !== this.loadSeq) return;
       this.render(data);
     } catch (err) {
-      if (this.destroyed) return;
-      this.element.innerHTML = `
-        <div style="padding: 32px; text-align: center; max-width: 440px; margin: 40px auto; background: var(--bg-card); border-radius: var(--radius-xl); border: var(--border-subtle);">
-          <h3 style="font-size: 18px; margin-bottom: 8px;">Sign in to see your Feed</h3>
-          <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 20px;">
-            Follow artists and creators to get their newest releases and reposts directly in your stream.
-          </p>
-          <button class="btn-primary" id="feed-btn-signin" style="padding: 9px 24px;">Sign In</button>
-        </div>
-      `;
-      this.element.querySelector('#feed-btn-signin')?.addEventListener('click', () => {
-        scLogin();
-      });
+      if (this.destroyed || seq !== this.loadSeq) return;
+      const msg = err instanceof Error ? err.message : String(err || 'Unknown error');
+      const isAuthError = /authentication required|session expired|401 unauthorized|not signed in/i.test(msg);
+      if (isAuthError) {
+        this.element.innerHTML = `
+          <div style="padding: 32px; text-align: center; max-width: 440px; margin: 40px auto; background: var(--bg-card); border-radius: var(--radius-xl); border: var(--border-subtle);">
+            <h3 style="font-size: 18px; margin-bottom: 8px;">Sign in to see your Feed</h3>
+            <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 20px;">
+              Follow artists and creators to get their newest releases and reposts directly in your stream.
+            </p>
+            <button class="btn-primary" id="feed-btn-signin" style="padding: 9px 24px;">Sign In</button>
+          </div>
+        `;
+        this.element.querySelector('#feed-btn-signin')?.addEventListener('click', () => {
+          scLogin();
+        });
+      } else {
+        this.element.innerHTML = `
+          <div style="padding: 32px; text-align: center; max-width: 440px; margin: 40px auto; background: var(--bg-card); border-radius: var(--radius-xl); border: var(--border-subtle);">
+            <h3 style="font-size: 18px; margin-bottom: 8px;">Could not load your Stream</h3>
+            <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 20px;">
+              ${escapeHtml(msg)}
+            </p>
+            <button class="btn-secondary" id="feed-btn-retry" style="padding: 9px 24px;">Retry</button>
+          </div>
+        `;
+        this.element.querySelector('#feed-btn-retry')?.addEventListener('click', () => {
+          this.loadData();
+        });
+      }
     }
   }
 
@@ -134,33 +152,10 @@ export class FeedView {
   }
 
   private updateLikeButtons(): void {
-    const likeButtons = this.element.querySelectorAll<HTMLElement>('.row-like-btn');
-    likeButtons.forEach((btn) => {
-      const id = Number(btn.dataset.trackId);
-      if (!id) return;
-      const isLiked = this.likesStore.isLiked(id);
-      btn.classList.toggle('liked', isLiked);
-      btn.innerHTML = HEART_ICON(isLiked);
-      btn.title = isLiked ? 'Unlike' : 'Like';
-    });
+    syncTrackRowStates(this.element, this.engine, this.likesStore);
   }
 
   private updatePlayButtons(): void {
-    const rowEls = this.element.querySelectorAll<HTMLElement>('.track-row');
-    rowEls.forEach((row) => {
-      const id = Number(row.dataset.trackId);
-      if (!id) return;
-      const isPlaying = this.engine.isTrackPlaying(id);
-      row.classList.toggle('playing', isPlaying);
-    });
-
-    const rowButtons = this.element.querySelectorAll<HTMLElement>('.row-play-btn');
-    rowButtons.forEach((btn) => {
-      const id = Number(btn.dataset.trackId);
-      if (!id) return;
-
-      const isPlaying = this.engine.isTrackPlaying(id);
-      btn.innerHTML = isPlaying ? ROW_PAUSE_ICON : ROW_PLAY_ICON;
-    });
+    syncTrackRowStates(this.element, this.engine);
   }
 }

@@ -1,6 +1,7 @@
 import { scUpdateProfile, scUploadProfileImage } from '../ipc.ts';
 import { toHighResArtwork } from '../player/AudioEngine.ts';
 import { showToast } from './Toast.ts';
+import { escapeHtml } from '../utils/format.ts';
 import type { User } from '../types.ts';
 
 function readFileAsDataUrl(file: File): Promise<string> {
@@ -83,14 +84,15 @@ export class EditProfileModal {
       this.user.visuals?.visuals?.[0]?.visual_url ||
       '';
 
+    const safeBanner = bannerUrl.replace(/['"\\()\r\n<>]/g, '');
     body.innerHTML = `
       <div class="ep-images-section">
-        <div class="ep-banner-preview" id="ep-banner-preview" style="${bannerUrl ? `background-image: url('${bannerUrl}')` : ''}">
+        <div class="ep-banner-preview" id="ep-banner-preview" style="${safeBanner ? `background-image: url('${escapeHtml(safeBanner)}')` : ''}">
           <label class="ep-image-pick-badge" for="ep-banner-file">Change Banner</label>
           <input type="file" id="ep-banner-file" accept="image/png,image/jpeg,image/webp" style="display: none;" />
         </div>
         <div class="ep-avatar-preview-wrap">
-          <img src="${avatarUrl}" alt="Avatar" id="ep-avatar-img" class="ep-avatar-preview" />
+          <img src="${escapeHtml(avatarUrl)}" alt="Avatar" id="ep-avatar-img" class="ep-avatar-preview" />
           <label class="ep-avatar-pick-btn" for="ep-avatar-file" title="Change Avatar">Change</label>
           <input type="file" id="ep-avatar-file" accept="image/png,image/jpeg,image/webp" style="display: none;" />
         </div>
@@ -98,23 +100,23 @@ export class EditProfileModal {
 
       <div class="settings-group">
         <span class="settings-group-title">Display Name</span>
-        <input type="text" class="settings-input" id="ep-username" value="${(this.user.username || '').replace(/"/g, '&quot;')}" />
+        <input type="text" class="settings-input" id="ep-username" value="${escapeHtml(this.user.username || '')}" />
       </div>
 
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
         <div class="settings-group">
           <span class="settings-group-title">City</span>
-          <input type="text" class="settings-input" id="ep-city" value="${(this.user.city || '').replace(/"/g, '&quot;')}" placeholder="City" />
+          <input type="text" class="settings-input" id="ep-city" value="${escapeHtml(this.user.city || '')}" placeholder="City" />
         </div>
         <div class="settings-group">
           <span class="settings-group-title">Country</span>
-          <input type="text" class="settings-input" id="ep-country" value="${(this.user.country || this.user.country_code || '').replace(/"/g, '&quot;')}" placeholder="Country" />
+          <input type="text" class="settings-input" id="ep-country" value="${escapeHtml(this.user.country || this.user.country_code || '')}" placeholder="Country" />
         </div>
       </div>
 
       <div class="settings-group">
         <span class="settings-group-title">Bio</span>
-        <textarea class="settings-input ep-bio-textarea" id="ep-description" rows="4" placeholder="Tell listeners about yourself...">${this.user.description || ''}</textarea>
+        <textarea class="settings-input ep-bio-textarea" id="ep-description" rows="4" placeholder="Tell listeners about yourself...">${escapeHtml(this.user.description || '')}</textarea>
       </div>
     `;
 

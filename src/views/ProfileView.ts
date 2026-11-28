@@ -14,15 +14,11 @@ import { showToast } from '../components/Toast.ts';
 import { EditProfileModal } from '../components/EditProfileModal.ts';
 import {
   createTrackRow,
-  HEART_ICON,
-  ROW_PLAY_ICON,
-  ROW_PAUSE_ICON,
+  syncCardPlayButtons,
+  syncTrackRowStates,
 } from '../components/TrackRow.ts';
+import { CARD_PLAY_ICON, CARD_SPINNER_ICON, escapeHtml, soundcloudCloudSvg } from '../utils/format.ts';
 import type { Track, Playlist, User, LibraryTrackItem } from '../types.ts';
-
-const PLAY_ICON = `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg>`;
-const PAUSE_ICON = `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
-const SPINNER_ICON = `<svg class="spinner" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle><path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor"></path></svg>`;
 
 const CAMERA_ICON = `
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -54,6 +50,7 @@ export class ProfileView {
   private unsubscribeAudio: (() => void) | null = null;
   private unsubscribeLikes: (() => void) | null = null;
   private destroyed: boolean = false;
+  private loadSeq: number = 0;
 
   constructor(onOpenPlaylist: (id: number | string) => void, userId?: number) {
     this.engine = AudioEngine.getInstance();
@@ -106,6 +103,7 @@ export class ProfileView {
   }
 
   private async loadData(): Promise<void> {
+    const seq = ++this.loadSeq;
     this.element.innerHTML = `
       <div class="profile-banner skeleton" style="height: 200px; width: 100%; border-radius: var(--radius-xl); margin-bottom: 24px;"></div>
       <div style="display: flex; gap: 20px; align-items: flex-end; margin-top: -60px; margin-left: 24px; margin-bottom: 24px;">
@@ -135,7 +133,7 @@ export class ProfileView {
       } catch (err) {
         meError = err;
       }
-      if (this.destroyed) return;
+      if (this.destroyed || seq !== this.loadSeq) return;
 
       const viewingOwn = !this.targetUserId || (me !== null && me.id === this.targetUserId);
       this.isOwnProfile = viewingOwn;
@@ -145,7 +143,7 @@ export class ProfileView {
           this.element.innerHTML = `
             <div style="padding: 24px; color: var(--text-secondary);">
               <h3>Could not reach SoundCloud</h3>
-              <p style="margin-top: 6px; font-size: 13px; color: var(--text-tertiary);">${String(meError)}</p>
+              <p style="margin-top: 6px; font-size: 13px; color: var(--text-tertiary);">${escapeHtml(String(meError))}</p>
               <button class="btn-secondary" id="profile-btn-retry" style="margin-top: 14px;">Retry</button>
             </div>
           `;
@@ -164,7 +162,7 @@ export class ProfileView {
           scGetUserTracks(me.id),
           scGetLibrary(me.id),
         ]);
-        if (this.destroyed) return;
+        if (this.destroyed || seq !== this.loadSeq) return;
 
         if (tracksRes.status === 'fulfilled') {
           const raw = tracksRes.value;
@@ -182,7 +180,7 @@ export class ProfileView {
           const likedTracks: Track[] = rawLikes
             .map((item: LibraryTrackItem) => (item.track || item) as unknown as Track)
             .filter((t: Track) => t && t.id && t.title);
-          this.likesStore.setTracks(likedTracks);
+          this.likesStore.setTracks(likedTracks, true);
           this.likes = this.likesStore.getLikedTracks();
           this.playlists = lib.playlists || [];
         } else {
@@ -190,7 +188,7 @@ export class ProfileView {
         }
       } else if (this.targetUserId) {
         const profileData = await scGetUserProfile(this.targetUserId);
-        if (this.destroyed) return;
+        if (this.destroyed || seq !== this.loadSeq) return;
         this.user = profileData.user;
         this.tracks = (profileData.tracks || []).filter((t: Track) => t && t.id && t.title);
         this.playlists = profileData.playlists || [];
@@ -198,17 +196,21 @@ export class ProfileView {
         this.isFollowing = Boolean(profileData.is_following);
       }
 
-      if (this.destroyed) return;
+      if (this.destroyed || seq !== this.loadSeq) return;
       this.render();
     } catch (err) {
-      if (this.destroyed) return;
+      if (this.destroyed || seq !== this.loadSeq) return;
       console.error('Failed to load profile:', err);
       this.element.innerHTML = `
         <div style="padding: 24px; color: var(--text-secondary);">
           <h3>Failed to load profile</h3>
-          <p style="margin-top: 6px; font-size: 13px; color: var(--text-tertiary);">${String(err)}</p>
+          <p style="margin-top: 6px; margin-bottom: 14px; font-size: 13px; color: var(--text-tertiary);">${escapeHtml(String(err))}</p>
+          <button class="btn-secondary" id="profile-btn-retry">Retry</button>
         </div>
       `;
+      this.element.querySelector('#profile-btn-retry')?.addEventListener('click', () => {
+        this.loadData();
+      });
     }
   }
 
@@ -220,9 +222,7 @@ export class ProfileView {
           Connect your SoundCloud account to see your profile, uploads, playlists, and statistics.
         </p>
         <button class="btn-primary" id="profile-btn-signin" style="padding: 9px 24px; display: inline-flex; align-items: center; gap: 8px;">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="#ffffff" style="flex-shrink: 0;">
-            <path d="M23.999 14.165c-.052 1.796-1.612 3.169-3.4 3.169h-8.18a.68.68 0 0 1-.675-.683V7.862a.747.747 0 0 1 .452-.724s.75-.513 2.333-.513a5.364 5.364 0 0 1 2.763.755 5.433 5.433 0 0 1 2.57 3.54c.282-.08.574-.121.868-.12.884 0 1.73.358 2.347.992s.948 1.49.922 2.373ZM10.721 8.421c.247 2.98.427 5.697 0 8.672a.264.264 0 0 1-.53 0c-.395-2.946-.22-5.718 0-8.672a.264.264 0 0 1 .53 0ZM9.072 9.448c.285 2.659.37 4.986-.006 7.655a.277.277 0 0 1-.55 0c-.331-2.63-.256-5.02 0-7.655a.277.277 0 0 1 .556 0Zm-1.663-.257c.27 2.726.39 5.171 0 7.904a.266.266 0 0 1-.532 0c-.38-2.69-.257-5.21 0-7.904a.266.266 0 0 1 .532 0Zm-1.647.77a26.108 26.108 0 0 1-.008 7.147.272.272 0 0 1-.542 0 27.955 27.955 0 0 1 0-7.147.275.275 0 0 1 .55 0Zm-1.67 1.769c.421 1.865.228 3.5-.029 5.388a.257.257 0 0 1-.514 0c-.21-1.858-.398-3.549 0-5.389a.272.272 0 0 1 .543 0Zm-1.655-.273c.388 1.897.26 3.508-.01 5.412-.026.28-.514.283-.54 0-.244-1.878-.347-3.54-.01-5.412a.283.283 0 0 1 .56 0Zm-1.668.911c.4 1.268.257 2.292-.026 3.572a.257.257 0 0 1-.514 0c-.241-1.262-.354-2.312-.023-3.572a.283.283 0 0 1 .563 0Z"/>
-          </svg>
+          ${soundcloudCloudSvg(18, '#ffffff')}
           <span>Sign In</span>
         </button>
       </div>
@@ -235,7 +235,7 @@ export class ProfileView {
   private render(): void {
     if (!this.user) return;
 
-    const bannerVisual = this.user.visuals?.visuals?.[0]?.visual_url || '';
+    const bannerVisual = (this.user.visuals?.visuals?.[0]?.visual_url || '').replace(/['"\\()\r\n<>]/g, '');
     const avatarUrl = toHighResArtwork(this.user.avatar_url) || 'https://a1.sndcdn.com/images/default_avatar_large.png';
     const username = this.user.username || 'User';
     const bio = this.user.description || '';
@@ -245,8 +245,13 @@ export class ProfileView {
     const locationParts = [this.user.city, this.user.country || this.user.country_code].filter(Boolean);
     const locationStr = locationParts.join(', ');
 
+    const safeUsername = escapeHtml(username);
+    const safeAvatar = escapeHtml(avatarUrl);
+    const safeLocation = escapeHtml(locationStr);
+    const safeBio = escapeHtml(bio);
+
     const bannerHtml = bannerVisual
-      ? `<div class="profile-banner-img" style="background-image: url('${bannerVisual}');"></div>`
+      ? `<div class="profile-banner-img" style="background-image: url('${escapeHtml(bannerVisual)}');"></div>`
       : `<div class="profile-banner-placeholder"></div>`;
 
     this.element.innerHTML = `
@@ -259,7 +264,7 @@ export class ProfileView {
         </div>
         <div class="profile-info-row">
           <div class="profile-avatar-wrapper">
-            <img class="profile-avatar-img" src="${avatarUrl}" alt="${username}" />
+            <img class="profile-avatar-img" src="${safeAvatar}" alt="${safeUsername}" />
             ${this.isOwnProfile ? `
               <div class="profile-avatar-cam-overlay" id="profile-cam-avatar" title="Change Avatar">${CAMERA_ICON}</div>
             ` : ''}
@@ -267,7 +272,7 @@ export class ProfileView {
           <div class="profile-info-main">
             <div class="profile-title-row" style="justify-content: space-between; width: 100%; flex-wrap: wrap;">
               <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
-                <h1 class="profile-username">${username}</h1>
+                <h1 class="profile-username">${safeUsername}</h1>
                 ${this.user.verified ? VERIFIED_BADGE : ''}
               </div>
               <div style="display: flex; gap: 10px; align-items: center;">
@@ -280,8 +285,8 @@ export class ProfileView {
                 `}
               </div>
             </div>
-            ${locationStr ? `<div style="font-size: 12.5px; color: var(--text-tertiary);">${locationStr}</div>` : ''}
-            ${bio ? `<p class="profile-bio">${bio}</p>` : ''}
+            ${safeLocation ? `<div style="font-size: 12.5px; color: var(--text-tertiary);">${safeLocation}</div>` : ''}
+            ${safeBio ? `<p class="profile-bio">${safeBio}</p>` : ''}
             <div class="profile-stats-row">
               <div class="profile-stat-item">
                 <span class="profile-stat-num">${trackCount.toLocaleString()}</span>
@@ -397,15 +402,18 @@ export class ProfileView {
 
         const card = document.createElement('div');
         card.className = 'card-item';
+        const safePlTitle = escapeHtml(title);
+        const safePlAuthor = escapeHtml(author);
+        const safePlCover = escapeHtml(cover);
         card.innerHTML = `
           <div class="card-cover-wrapper">
-            <img class="card-cover-img" src="${cover}" alt="${title}" loading="lazy" decoding="async" />
+            <img class="card-cover-img" src="${safePlCover}" alt="${safePlTitle}" loading="lazy" decoding="async" />
             <div class="card-play-hover-btn" data-kind="playlist" data-id="${pl.id}" title="Play playlist">
-              ${PLAY_ICON}
+              ${CARD_PLAY_ICON}
             </div>
           </div>
-          <div class="card-title" title="${title}">${title}</div>
-          <div class="card-author ${authorId ? 'clickable-link' : ''}" title="${author}">${author} &bull; ${pl.track_count || 0} tracks</div>
+          <div class="card-title" title="${safePlTitle}">${safePlTitle}</div>
+          <div class="card-author ${authorId ? 'clickable-link' : ''}" title="${safePlAuthor}">${safePlAuthor} &bull; ${pl.track_count || 0} tracks</div>
         `;
 
         if (authorId) {
@@ -421,7 +429,7 @@ export class ProfileView {
           if (this.engine.currentCollectionId !== null && String(this.engine.currentCollectionId) === String(pl.id)) {
             this.engine.togglePlay();
           } else {
-            playBtn.innerHTML = SPINNER_ICON;
+            playBtn.innerHTML = CARD_SPINNER_ICON;
             try {
               let tracks: Track[] = [];
               if (Array.isArray(pl.tracks) && pl.tracks.length > 0 && pl.tracks[0]?.media?.transcodings?.length) {
@@ -476,46 +484,11 @@ export class ProfileView {
   }
 
   private updateLikeButtons(): void {
-    const likeButtons = this.element.querySelectorAll<HTMLElement>('.row-like-btn');
-    likeButtons.forEach((btn) => {
-      const id = Number(btn.dataset.trackId);
-      if (!id) return;
-      const isLiked = this.likesStore.isLiked(id);
-      btn.classList.toggle('liked', isLiked);
-      btn.innerHTML = HEART_ICON(isLiked);
-      btn.title = isLiked ? 'Unlike' : 'Like';
-    });
+    syncTrackRowStates(this.element, this.engine, this.likesStore);
   }
 
   private updatePlayButtons(): void {
-    const cardButtons = this.element.querySelectorAll<HTMLElement>('.card-play-hover-btn');
-    cardButtons.forEach((btn) => {
-      const id = btn.dataset.id;
-      if (!id) return;
-      const isPlaying = this.engine.isCollectionPlaying(id);
-      if (isPlaying) {
-        btn.classList.add('playing');
-        btn.innerHTML = PAUSE_ICON;
-      } else {
-        btn.classList.remove('playing');
-        btn.innerHTML = PLAY_ICON;
-      }
-    });
-
-    const rowEls = this.element.querySelectorAll<HTMLElement>('.track-row');
-    rowEls.forEach((row) => {
-      const id = Number(row.dataset.trackId);
-      if (!id) return;
-      const isPlaying = this.engine.isTrackPlaying(id);
-      row.classList.toggle('playing', isPlaying);
-    });
-
-    const rowButtons = this.element.querySelectorAll<HTMLElement>('.row-play-btn');
-    rowButtons.forEach((btn) => {
-      const id = Number(btn.dataset.trackId);
-      if (!id) return;
-      const isPlaying = this.engine.isTrackPlaying(id);
-      btn.innerHTML = isPlaying ? ROW_PAUSE_ICON : ROW_PLAY_ICON;
-    });
+    syncCardPlayButtons(this.element, this.engine);
+    syncTrackRowStates(this.element, this.engine);
   }
 }

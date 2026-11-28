@@ -4,10 +4,9 @@ import { LikesStore } from '../state/LikesStore.ts';
 import { AppNavigator } from '../state/AppNavigator.ts';
 import {
   createTrackRow,
-  HEART_ICON,
-  ROW_PLAY_ICON,
-  ROW_PAUSE_ICON,
+  syncTrackRowStates,
 } from '../components/TrackRow.ts';
+import { escapeHtml } from '../utils/format.ts';
 import type { Playlist, Track } from '../types.ts';
 
 export class CollectionDetailView {
@@ -19,6 +18,7 @@ export class CollectionDetailView {
   private unsubscribeAudio: (() => void) | null = null;
   private unsubscribeLikes: (() => void) | null = null;
   private destroyed: boolean = false;
+  private loadSeq: number = 0;
 
   constructor(playlistId: number | string) {
     this.engine = AudioEngine.getInstance();
@@ -49,6 +49,7 @@ export class CollectionDetailView {
   }
 
   private async loadData(): Promise<void> {
+    const seq = ++this.loadSeq;
     this.element.innerHTML = `
       <div class="collection-header">
         <div class="collection-cover skeleton" style="border: none;"></div>
@@ -73,16 +74,20 @@ export class CollectionDetailView {
 
     try {
       this.playlist = await scGetPlaylist(this.playlistId);
-      if (this.destroyed) return;
+      if (this.destroyed || seq !== this.loadSeq) return;
       this.render();
     } catch (err) {
-      if (this.destroyed) return;
+      if (this.destroyed || seq !== this.loadSeq) return;
       this.element.innerHTML = `
         <div style="padding: 24px; color: var(--text-secondary);">
           <h3>Failed to load collection</h3>
-          <p style="margin-top: 6px; font-size: 13px; color: var(--text-tertiary);">${String(err)}</p>
+          <p style="margin-top: 6px; margin-bottom: 14px; font-size: 13px; color: var(--text-tertiary);">${escapeHtml(String(err))}</p>
+          <button class="btn-secondary" id="collection-btn-retry">Retry</button>
         </div>
       `;
+      this.element.querySelector('#collection-btn-retry')?.addEventListener('click', () => {
+        this.loadData();
+      });
     }
   }
 
@@ -105,15 +110,19 @@ export class CollectionDetailView {
     const mins = Math.floor((totalSec % 3600) / 60);
     const durationFormatted = hours > 0 ? `${hours} hr ${mins} min` : `${mins} min`;
 
+    const safeTitle = escapeHtml(title);
+    const safeAuthor = escapeHtml(author);
+    const safeCover = escapeHtml(cover);
+
     this.element.innerHTML = `
       <div class="collection-header">
         <div class="collection-cover">
-          <img src="${cover}" alt="${title}" />
+          <img src="${safeCover}" alt="${safeTitle}" />
         </div>
         <div class="collection-meta">
           <span class="collection-badge">Playlist</span>
-          <h1 class="collection-title">${title}</h1>
-          <span class="collection-artist ${pl.user?.id ? 'clickable-link' : ''}" id="collection-artist-link">${author}</span>
+          <h1 class="collection-title">${safeTitle}</h1>
+          <span class="collection-artist ${pl.user?.id ? 'clickable-link' : ''}" id="collection-artist-link">${safeAuthor}</span>
           <span class="collection-counts">${count} tracks &bull; ${durationFormatted}</span>
           <div class="collection-actions">
             <button class="btn-primary" id="collection-btn-playall" style="display: flex; align-items: center; gap: 8px;">
@@ -176,15 +185,7 @@ export class CollectionDetailView {
   }
 
   private updateLikeButtons(): void {
-    const likeButtons = this.element.querySelectorAll<HTMLElement>('.row-like-btn');
-    likeButtons.forEach((btn) => {
-      const id = Number(btn.dataset.trackId);
-      if (!id) return;
-      const isLiked = this.likesStore.isLiked(id);
-      btn.classList.toggle('liked', isLiked);
-      btn.innerHTML = HEART_ICON(isLiked);
-      btn.title = isLiked ? 'Unlike' : 'Like';
-    });
+    syncTrackRowStates(this.element, this.engine, this.likesStore);
   }
 
   private updatePlayAllBtn(): void {
@@ -198,20 +199,6 @@ export class CollectionDetailView {
       }
     }
 
-    const rowEls = this.element.querySelectorAll<HTMLElement>('.track-row');
-    rowEls.forEach((row) => {
-      const id = Number(row.dataset.trackId);
-      if (!id) return;
-      const isPlaying = this.engine.isTrackPlaying(id);
-      row.classList.toggle('playing', isPlaying);
-    });
-
-    const rowButtons = this.element.querySelectorAll<HTMLElement>('.row-play-btn');
-    rowButtons.forEach((btn) => {
-      const id = Number(btn.dataset.trackId);
-      if (!id) return;
-      const isPlaying = this.engine.isTrackPlaying(id);
-      btn.innerHTML = isPlaying ? ROW_PAUSE_ICON : ROW_PLAY_ICON;
-    });
+    syncTrackRowStates(this.element, this.engine);
   }
 }

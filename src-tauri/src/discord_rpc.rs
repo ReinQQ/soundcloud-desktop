@@ -283,8 +283,8 @@ pub fn send_activity_packet(
 
     let large_image_key = cover_url.as_deref().unwrap_or("soundcloud");
     let large_text = sanitize_text(&title, 128);
-    let small_image_key = if payload.is_playing { "play" } else { "pause" };
-    let small_text = sanitize_text(if payload.is_playing { "Playing" } else { "Paused" }, 128);
+    let small_image_key = "play";
+    let small_text = sanitize_text("Playing", 128);
 
     let assets = Assets::new()
         .large_image(large_image_key)

@@ -1,6 +1,8 @@
 use regex::Regex;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -9,6 +11,7 @@ use crate::media_relay::MediaRelay;
 
 pub const CHROME_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36";
 const FALLBACK_CLIENT_ID: &str = "glXhJxvYKPM87la70dG2G1bJ03AdA3hN";
+static DD_PROFILE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamResolution {
@@ -38,6 +41,8 @@ pub struct SoundCloudClient {
     negative_stream_cache: Arc<RwLock<HashMap<u64, (String, Instant)>>>,
     response_cache: Arc<RwLock<HashMap<String, (serde_json::Value, Instant)>>>,
     in_flight: InFlightMap,
+    dd_refresh_lock: Arc<tokio::sync::Mutex<()>>,
+    cache_epoch: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +57,107 @@ impl std::fmt::Display for GetMeError {
             Self::Unauthorized(msg) | Self::Recoverable(msg) => write!(f, "{msg}"),
         }
     }
+}
+
+#[derive(Debug)]
+enum ApiJsonError {
+    DataDome(String),
+    Unauthorized(String),
+    Recoverable(String),
+}
+
+impl ApiJsonError {
+    fn into_message(self) -> String {
+        match self {
+            Self::DataDome(m) | Self::Unauthorized(m) | Self::Recoverable(m) => m,
+        }
+    }
+}
+
+pub(crate) fn is_html_body(content_type: &str, body: &str) -> bool {
+    if content_type.to_lowercase().contains("text/html") {
+        return true;
+    }
+    let trimmed = body.trim_start().to_lowercase();
+    trimmed.starts_with("<!doctype")
+        || trimmed.starts_with("<html")
+        || trimmed.starts_with("<head")
+        || trimmed.starts_with("<body")
+}
+
+pub(crate) fn is_datadome_response(status: reqwest::StatusCode, content_type: &str, body: &str) -> bool {
+    let lower = body.to_lowercase();
+    lower.contains("geo.captcha-delivery.com")
+        || lower.contains("captcha-delivery.com")
+        || (lower.contains("datadome") && (status == reqwest::StatusCode::FORBIDDEN || is_html_body(content_type, body)))
+}
+
+async fn read_and_parse_json<T: DeserializeOwned>(
+    resp: reqwest::Response,
+    context: &str,
+) -> Result<T, ApiJsonError> {
+    let status = resp.status();
+    if status == reqwest::StatusCode::PROXY_AUTHENTICATION_REQUIRED {
+        return Err(ApiJsonError::Recoverable(
+            "Proxy authentication failed (HTTP 407). Verify username and password in Settings.".to_string(),
+        ));
+    }
+
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| ApiJsonError::Recoverable(format!("{context}: failed to read response body: {e}")))?;
+
+    let snippet: String = body.chars().take(240).collect();
+
+    if is_datadome_response(status, &content_type, &body) {
+        return Err(ApiJsonError::DataDome(format!(
+            "SoundCloud anti-bot verification challenge ({status})"
+        )));
+    }
+
+    let html = is_html_body(&content_type, &body);
+
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        if html {
+            return Err(ApiJsonError::Recoverable(format!(
+                "{context}: received HTML verification/proxy page on HTTP 401: {snippet}"
+            )));
+        }
+        return Err(ApiJsonError::Unauthorized(
+            "SoundCloud session expired (HTTP 401 Unauthorized)".to_string(),
+        ));
+    }
+
+    if !status.is_success() {
+        if html {
+            return Err(ApiJsonError::Recoverable(format!(
+                "{context}: HTTP {status} HTML response (possible proxy/CDN block): {snippet}"
+            )));
+        }
+        return Err(ApiJsonError::Recoverable(format!(
+            "{context} failed ({status}): {snippet}"
+        )));
+    }
+
+    if html {
+        return Err(ApiJsonError::Recoverable(format!(
+            "{context}: expected JSON but received HTML response (possible proxy/captive portal/captcha): {snippet}"
+        )));
+    }
+
+    serde_json::from_str::<T>(&body).map_err(|e| {
+        ApiJsonError::Recoverable(format!(
+            "{context}: invalid JSON response ({e}); body={snippet}"
+        ))
+    })
 }
 
 pub fn build_http_client(proxy_enabled: bool, proxy_url: &str) -> Result<reqwest::Client, String> {
@@ -200,6 +306,8 @@ impl SoundCloudClient {
             negative_stream_cache: Arc::new(RwLock::new(HashMap::new())),
             response_cache: Arc::new(RwLock::new(HashMap::new())),
             in_flight: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            dd_refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
+            cache_epoch: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -250,6 +358,7 @@ impl SoundCloudClient {
     }
 
     pub fn clear_all_caches(&self) {
+        self.cache_epoch.fetch_add(1, Ordering::SeqCst);
         if let Ok(mut guard) = self.cached_client_id.write() {
             *guard = None;
         }
@@ -268,6 +377,7 @@ impl SoundCloudClient {
     }
 
     pub fn clear_user_cache(&self) {
+        self.cache_epoch.fetch_add(1, Ordering::SeqCst);
         if let Ok(mut guard) = self.cached_user_id.write() {
             *guard = None;
         }
@@ -340,20 +450,37 @@ impl SoundCloudClient {
         }
     }
 
-    async fn extract_client_id_with_http(client: &reqwest::Client) -> Result<String, String> {
-        let html = client
+    async fn extract_client_id_with_http(
+        client: &reqwest::Client,
+        datadome_cookie: Option<&str>,
+    ) -> Result<String, String> {
+        let mut req = client
             .get("https://soundcloud.com")
             .timeout(Duration::from_secs(20))
+            .header(reqwest::header::USER_AGENT, CHROME_USER_AGENT)
+            .header(reqwest::header::ACCEPT, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .header(reqwest::header::ACCEPT_LANGUAGE, "en-US,en;q=0.9");
+        if let Some(dd) = datadome_cookie.filter(|s| !s.is_empty()) {
+            req = req.header(reqwest::header::COOKIE, format!("datadome={dd}"));
+        }
+
+        let resp = req
             .send()
             .await
-            .map_err(|e| format!("Failed to fetch soundcloud.com: {e}"))?
+            .map_err(|e| format!("Failed to fetch soundcloud.com: {e}"))?;
+        let status = resp.status();
+        let html = resp
             .text()
             .await
             .map_err(|e| format!("Failed to read soundcloud.com html: {e}"))?;
 
+        if is_datadome_response(status, "text/html", &html) {
+            return Err("SoundCloud returned a DataDome verification challenge while fetching client_id".to_string());
+        }
+
         let script_urls = extract_script_urls(&html);
         if script_urls.is_empty() {
-            return Err("No asset script tags found in HTML".to_string());
+            return Err(format!("No asset script tags found in HTML (HTTP {status})"));
         }
 
         let mut seen = std::collections::HashSet::new();
@@ -369,6 +496,7 @@ impl SoundCloudClient {
             if let Ok(resp) = client
                 .get(&script_url)
                 .timeout(Duration::from_secs(15))
+                .header(reqwest::header::USER_AGENT, CHROME_USER_AGENT)
                 .send()
                 .await
                 && let Ok(js) = resp.text().await
@@ -383,7 +511,12 @@ impl SoundCloudClient {
 
     pub async fn extract_client_id(&self) -> Result<String, String> {
         let client = self.client().await;
-        let client_id = Self::extract_client_id_with_http(&client).await?;
+        let dd = self
+            .settings
+            .read()
+            .ok()
+            .and_then(|s| s.datadome_cookie.clone());
+        let client_id = Self::extract_client_id_with_http(&client, dd.as_deref()).await?;
         if let Ok(mut guard) = self.cached_client_id.write() {
             *guard = Some(client_id.clone());
         }
@@ -428,28 +561,75 @@ impl SoundCloudClient {
         r
     }
 
-    pub async fn refresh_datadome_cookie(&self) -> Result<String, String> {
-        log::info!("refresh_datadome_cookie: starting background refresh window...");
-        if let Some(existing) = self.app_handle.get_webview_window("dd-refresh") {
-            let _ = existing.destroy();
-        }
-
-        let proxy_enabled = self.settings.read().map(|s| s.proxy_enabled).unwrap_or(false);
-        let webview_proxy = if proxy_enabled {
-            let mut ep = None;
-            if let Some(bridge_state) = self.app_handle.try_state::<crate::ProxyBridgeState>() {
-                let guard = bridge_state.0.read().await;
-                if let Some(ref bridge) = *guard {
-                    ep = Some(bridge.local_http_str());
+    pub fn harvest_webview_cookies(win: &tauri::WebviewWindow) -> (Option<String>, Option<String>) {
+        fn scan_cookies(
+            cookies: Vec<tauri::webview::Cookie<'static>>,
+            oauth_token: &mut Option<String>,
+            datadome: &mut Option<String>,
+        ) {
+            for c in cookies {
+                let name = c.name();
+                if name == "oauth_token" && oauth_token.is_none() {
+                    let val = c.value().trim().trim_matches('"');
+                    if !val.is_empty() {
+                        *oauth_token = Some(val.to_string());
+                    }
+                } else if name == "datadome" && datadome.is_none() {
+                    let val = c.value().trim().trim_matches('"');
+                    if !val.is_empty() {
+                        *datadome = Some(val.to_string());
+                    }
                 }
             }
-            if ep.is_none() {
-                ep = self
-                    .app_handle
-                    .try_state::<crate::WebviewProxyEndpoint>()
-                    .and_then(|s| s.0.read().ok().and_then(|g| g.clone()));
+        }
+
+        let mut oauth_token: Option<String> = None;
+        let mut datadome: Option<String> = None;
+
+        if let Ok(sc_url) = "https://soundcloud.com".parse::<url::Url>()
+            && let Ok(cookies) = win.cookies_for_url(sc_url)
+        {
+            scan_cookies(cookies, &mut oauth_token, &mut datadome);
+        }
+        if (oauth_token.is_none() || datadome.is_none())
+            && let Ok(api_url) = "https://api-v2.soundcloud.com".parse::<url::Url>()
+            && let Ok(cookies) = win.cookies_for_url(api_url)
+        {
+            scan_cookies(cookies, &mut oauth_token, &mut datadome);
+        }
+        if (oauth_token.is_none() || datadome.is_none())
+            && let Ok(cookies) = win.cookies()
+        {
+            scan_cookies(cookies, &mut oauth_token, &mut datadome);
+        }
+
+        (oauth_token, datadome)
+    }
+
+    pub async fn refresh_datadome_cookie(&self) -> Result<String, String> {
+        let _dd_guard = self.dd_refresh_lock.lock().await;
+        log::info!("refresh_datadome_cookie: starting isolated background refresh window...");
+        if let Some(existing) = self.app_handle.get_webview_window("dd-refresh") {
+            let _ = existing.destroy();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        crate::cleanup_stale_webview_dirs(&self.app_handle, true);
+
+        let (proxy_enabled, proxy_url) = self
+            .settings
+            .read()
+            .map(|s| (s.proxy_enabled, s.proxy_url.clone()))
+            .unwrap_or((false, String::new()));
+        let webview_proxy = if proxy_enabled {
+            match crate::sync_proxy_bridge(&self.app_handle, true, &proxy_url).await {
+                Ok(ep) => ep,
+                Err(e) => {
+                    log::warn!("refresh_datadome_cookie: failed to ensure ProxyBridge: {e}");
+                    self.app_handle
+                        .try_state::<crate::WebviewProxyEndpoint>()
+                        .and_then(|s| s.0.read().ok().and_then(|g| g.clone()))
+                }
             }
-            ep
         } else {
             None
         };
@@ -458,6 +638,7 @@ impl SoundCloudClient {
         let mut browser_args: Vec<String> = vec![
             "--disable-popup-blocking".to_string(),
             "--disable-blink-features=AutomationControlled".to_string(),
+            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection".to_string(),
         ];
         #[cfg(windows)]
         if let Some(ref endpoint) = webview_proxy {
@@ -477,14 +658,15 @@ impl SoundCloudClient {
             }
         }
 
-        // Isolated data directory so WebView2 honors --proxy-server independently of the main window.
+        // Isolated per-attempt data directory so WebView2 honors --proxy-server and fresh cookies.
+        let dd_seq = DD_PROFILE_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
         let webview2_dir = self
             .app_handle
             .path()
             .app_local_data_dir()
             .ok()
             .map(|d| {
-                let dir = d.join("webview2_dd");
+                let dir = d.join(format!("webview2_dd_{dd_seq}"));
                 let _ = std::fs::create_dir_all(&dir);
                 dir
             });
@@ -504,8 +686,8 @@ impl SoundCloudClient {
         .inner_size(480.0, 680.0)
         .center();
 
-        if let Some(dir) = webview2_dir {
-            builder = builder.data_directory(dir);
+        if let Some(ref dir) = webview2_dir {
+            builder = builder.data_directory(dir.clone());
         }
 
         #[cfg(windows)]
@@ -521,48 +703,31 @@ impl SoundCloudClient {
             .build()
             .map_err(|e| format!("Failed to create dd-refresh window: {e}"))?;
 
-        let sc_url = "https://soundcloud.com".parse::<url::Url>().ok();
+        let save_dd = |cookie_val: &str| {
+            if let Ok(mut lock) = self.settings.write() {
+                lock.datadome_cookie = Some(cookie_val.to_string());
+                let _ = lock.save(&self.app_handle);
+            }
+        };
 
-        // Phase 1: Silent harvest for up to 3.5 seconds
+        // Phase 1: Silent harvest for up to 3.6 seconds
         for _ in 0..12 {
             tokio::time::sleep(Duration::from_millis(300)).await;
             if self.app_handle.get_webview_window("dd-refresh").is_none() {
+                if let Some(ref dir) = webview2_dir {
+                    let _ = std::fs::remove_dir_all(dir);
+                }
                 return Err("dd-refresh window closed early".to_string());
             }
 
-            let mut found: Option<String> = None;
-            if let Some(ref u) = sc_url
-                && let Ok(cookies) = win.cookies_for_url(u.clone()) {
-                    for c in cookies {
-                        if c.name() == "datadome" {
-                            let val = c.value().trim().trim_matches('"');
-                            if !val.is_empty() {
-                                found = Some(val.to_string());
-                                break;
-                            }
-                        }
-                    }
-                }
-            if found.is_none()
-                && let Ok(cookies) = win.cookies() {
-                    for c in cookies {
-                        if c.name() == "datadome" {
-                            let val = c.value().trim().trim_matches('"');
-                            if !val.is_empty() {
-                                found = Some(val.to_string());
-                                break;
-                            }
-                        }
-                    }
-                }
-
+            let (_, found) = Self::harvest_webview_cookies(&win);
             if let Some(cookie_val) = found {
                 log::info!("Harvested fresh DataDome cookie silently in background!");
-                if let Ok(mut lock) = self.settings.write() {
-                    lock.datadome_cookie = Some(cookie_val.clone());
-                    let _ = lock.save(&self.app_handle);
-                }
+                save_dd(&cookie_val);
                 let _ = win.destroy();
+                if let Some(ref dir) = webview2_dir {
+                    let _ = std::fs::remove_dir_all(dir);
+                }
                 return Ok(cookie_val);
             }
         }
@@ -578,31 +743,22 @@ impl SoundCloudClient {
                 break;
             }
 
-            let mut found: Option<String> = None;
-            if let Ok(cookies) = win.cookies() {
-                for c in cookies {
-                    if c.name() == "datadome" {
-                        let val = c.value().trim().trim_matches('"');
-                        if !val.is_empty() {
-                            found = Some(val.to_string());
-                            break;
-                        }
-                    }
-                }
-            }
-
+            let (_, found) = Self::harvest_webview_cookies(&win);
             if let Some(cookie_val) = found {
                 log::info!("User passed DataDome challenge. Saved fresh cookie!");
-                if let Ok(mut lock) = self.settings.write() {
-                    lock.datadome_cookie = Some(cookie_val.clone());
-                    let _ = lock.save(&self.app_handle);
-                }
+                save_dd(&cookie_val);
                 let _ = win.destroy();
+                if let Some(ref dir) = webview2_dir {
+                    let _ = std::fs::remove_dir_all(dir);
+                }
                 return Ok(cookie_val);
             }
         }
 
         let _ = win.destroy();
+        if let Some(ref dir) = webview2_dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
         Err("DataDome verification timed out or was closed by user".to_string())
     }
 
@@ -660,7 +816,39 @@ impl SoundCloudClient {
         Err("SoundCloud API request failed after retry".to_string())
     }
 
+    async fn execute_api_json<T: DeserializeOwned>(
+        &self,
+        method: reqwest::Method,
+        endpoint: &str,
+        query_params: &[(&str, &str)],
+        body: Option<serde_json::Value>,
+        oauth_token: Option<&str>,
+        context: &str,
+    ) -> Result<T, String> {
+        let resp = self
+            .execute_api_request(method.clone(), endpoint, query_params, body.clone(), oauth_token)
+            .await?;
+
+        match read_and_parse_json(resp, context).await {
+            Ok(parsed) => Ok(parsed),
+            Err(ApiJsonError::DataDome(msg)) => {
+                log::warn!("DataDome challenge on {context}, refreshing datadome cookie...");
+                if self.refresh_datadome_cookie().await.is_ok() {
+                    let retry_resp = self
+                        .execute_api_request(method, endpoint, query_params, body, oauth_token)
+                        .await?;
+                    return read_and_parse_json(retry_resp, context)
+                        .await
+                        .map_err(|e| e.into_message());
+                }
+                Err(msg)
+            }
+            Err(e) => Err(e.into_message()),
+        }
+    }
+
     pub async fn get_discover(&self, oauth_token: Option<&str>) -> Result<serde_json::Value, String> {
+        let epoch = self.cache_epoch.load(Ordering::SeqCst);
         let cache_key = format!("discover:{}", oauth_token.unwrap_or("guest"));
         if let Ok(guard) = self.response_cache.read()
             && let Some((val, timestamp)) = guard.get(&cache_key)
@@ -668,22 +856,18 @@ impl SoundCloudClient {
                     return Ok(val.clone());
                 }
 
-        let resp = self
-            .execute_api_request(
+        let main_res: Result<serde_json::Value, String> = self
+            .execute_api_json(
                 reqwest::Method::GET,
                 "https://api-v2.soundcloud.com/mixed-selections",
                 &[("limit", "10")],
                 None,
                 oauth_token,
+                "Discover selections",
             )
-            .await?;
+            .await;
 
-        if resp.status().is_success() {
-            let mut json: serde_json::Value = resp
-                .json()
-                .await
-                .map_err(|e| format!("Failed to parse discover JSON: {e}"))?;
-
+        if let Ok(mut json) = main_res {
             if let Some(collection) = json.get_mut("collection").and_then(|c| c.as_array_mut()) {
                 for section in collection {
                     let items_opt = if let Some(items) = section
@@ -762,26 +946,24 @@ impl SoundCloudClient {
                 }
             }
 
-            if let Ok(mut guard) = self.response_cache.write() {
+            if self.cache_epoch.load(Ordering::SeqCst) == epoch
+                && let Ok(mut guard) = self.response_cache.write()
+            {
                 guard.insert(cache_key, (json.clone(), Instant::now()));
             }
             return Ok(json);
         }
 
-        let fallback_resp = self
-            .execute_api_request(
+        let mut fallback_json: serde_json::Value = self
+            .execute_api_json(
                 reqwest::Method::GET,
                 "https://api-v2.soundcloud.com/search/tracks",
                 &[("q", "top"), ("limit", "20")],
                 None,
                 oauth_token,
+                "Discover fallback",
             )
             .await?;
-
-        let mut fallback_json: serde_json::Value = fallback_resp
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse fallback discover JSON: {e}"))?;
 
         if let Some(collection) = fallback_json.get_mut("collection").and_then(|c| c.as_array_mut()) {
             for item in collection {
@@ -789,7 +971,9 @@ impl SoundCloudClient {
             }
         }
 
-        if let Ok(mut guard) = self.response_cache.write() {
+        if self.cache_epoch.load(Ordering::SeqCst) == epoch
+            && let Ok(mut guard) = self.response_cache.write()
+        {
             guard.insert(cache_key, (fallback_json.clone(), Instant::now()));
         }
 
@@ -797,6 +981,7 @@ impl SoundCloudClient {
     }
 
     pub async fn get_stream(&self, oauth_token: &str) -> Result<serde_json::Value, String> {
+        let epoch = self.cache_epoch.load(Ordering::SeqCst);
         let cache_key = format!("stream:{oauth_token}");
         if let Ok(guard) = self.response_cache.read()
             && let Some((val, timestamp)) = guard.get(&cache_key)
@@ -804,26 +989,20 @@ impl SoundCloudClient {
                     return Ok(val.clone());
                 }
 
-        let resp = self
-            .execute_api_request(
+        let json: serde_json::Value = self
+            .execute_api_json(
                 reqwest::Method::GET,
                 "https://api-v2.soundcloud.com/stream",
                 &[("limit", "25")],
                 None,
                 Some(oauth_token),
+                "Stream feed",
             )
             .await?;
 
-        if !resp.status().is_success() {
-            return Err(format!("Stream request failed with status: {}", resp.status()));
-        }
-
-        let json: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse stream JSON: {e}"))?;
-
-        if let Ok(mut guard) = self.response_cache.write() {
+        if self.cache_epoch.load(Ordering::SeqCst) == epoch
+            && let Ok(mut guard) = self.response_cache.write()
+        {
             guard.insert(cache_key, (json.clone(), Instant::now()));
         }
 
@@ -838,46 +1017,37 @@ impl SoundCloudClient {
     ) -> Result<serde_json::Value, String> {
         match kind.unwrap_or("all") {
             "tracks" => {
-                let resp = self
-                    .execute_api_request(
-                        reqwest::Method::GET,
-                        "https://api-v2.soundcloud.com/search/tracks",
-                        &[("q", query), ("limit", "30")],
-                        None,
-                        oauth_token,
-                    )
-                    .await?;
-                resp.json()
-                    .await
-                    .map_err(|e| format!("Failed to parse search tracks JSON: {e}"))
+                self.execute_api_json(
+                    reqwest::Method::GET,
+                    "https://api-v2.soundcloud.com/search/tracks",
+                    &[("q", query), ("limit", "30")],
+                    None,
+                    oauth_token,
+                    "Search tracks",
+                )
+                .await
             }
             "playlists" => {
-                let resp = self
-                    .execute_api_request(
-                        reqwest::Method::GET,
-                        "https://api-v2.soundcloud.com/search/playlists",
-                        &[("q", query), ("limit", "30")],
-                        None,
-                        oauth_token,
-                    )
-                    .await?;
-                resp.json()
-                    .await
-                    .map_err(|e| format!("Failed to parse search playlists JSON: {e}"))
+                self.execute_api_json(
+                    reqwest::Method::GET,
+                    "https://api-v2.soundcloud.com/search/playlists",
+                    &[("q", query), ("limit", "30")],
+                    None,
+                    oauth_token,
+                    "Search playlists",
+                )
+                .await
             }
             "users" => {
-                let resp = self
-                    .execute_api_request(
-                        reqwest::Method::GET,
-                        "https://api-v2.soundcloud.com/search/users",
-                        &[("q", query), ("limit", "30")],
-                        None,
-                        oauth_token,
-                    )
-                    .await?;
-                resp.json()
-                    .await
-                    .map_err(|e| format!("Failed to parse search users JSON: {e}"))
+                self.execute_api_json(
+                    reqwest::Method::GET,
+                    "https://api-v2.soundcloud.com/search/users",
+                    &[("q", query), ("limit", "30")],
+                    None,
+                    oauth_token,
+                    "Search users",
+                )
+                .await
             }
             _ => {
                 let tracks_params = [("q", query), ("limit", "20")];
@@ -885,41 +1055,39 @@ impl SoundCloudClient {
                 let users_params = [("q", query), ("limit", "10")];
 
                 let (tracks_res, playlists_res, users_res) = tokio::join!(
-                    self.execute_api_request(
+                    self.execute_api_json::<serde_json::Value>(
                         reqwest::Method::GET,
                         "https://api-v2.soundcloud.com/search/tracks",
                         &tracks_params,
                         None,
                         oauth_token,
+                        "Search tracks",
                     ),
-                    self.execute_api_request(
+                    self.execute_api_json::<serde_json::Value>(
                         reqwest::Method::GET,
                         "https://api-v2.soundcloud.com/search/playlists",
                         &playlists_params,
                         None,
                         oauth_token,
+                        "Search playlists",
                     ),
-                    self.execute_api_request(
+                    self.execute_api_json::<serde_json::Value>(
                         reqwest::Method::GET,
                         "https://api-v2.soundcloud.com/search/users",
                         &users_params,
                         None,
                         oauth_token,
+                        "Search users",
                     )
                 );
 
-                let tracks_val: serde_json::Value = match tracks_res {
-                    Ok(r) => r.json().await.unwrap_or(serde_json::json!({"collection": []})),
-                    Err(_) => serde_json::json!({"collection": []}),
-                };
-                let playlists_val: serde_json::Value = match playlists_res {
-                    Ok(r) => r.json().await.unwrap_or(serde_json::json!({"collection": []})),
-                    Err(_) => serde_json::json!({"collection": []}),
-                };
-                let users_val: serde_json::Value = match users_res {
-                    Ok(r) => r.json().await.unwrap_or(serde_json::json!({"collection": []})),
-                    Err(_) => serde_json::json!({"collection": []}),
-                };
+                if let (Err(e1), Err(_), Err(_)) = (&tracks_res, &playlists_res, &users_res) {
+                    return Err(e1.clone());
+                }
+
+                let tracks_val = tracks_res.unwrap_or_else(|_| serde_json::json!({"collection": []}));
+                let playlists_val = playlists_res.unwrap_or_else(|_| serde_json::json!({"collection": []}));
+                let users_val = users_res.unwrap_or_else(|_| serde_json::json!({"collection": []}));
 
                 Ok(serde_json::json!({
                     "tracks": tracks_val.get("collection").unwrap_or(&serde_json::json!([])),
@@ -939,6 +1107,7 @@ impl SoundCloudClient {
         let mut results = Vec::new();
         let mut next_url = Some(initial_url.to_string());
         let mut pages = 0;
+        let mut dd_refreshed = false;
 
         while let Some(current_url) = next_url {
             if pages >= max_pages {
@@ -964,6 +1133,12 @@ impl SoundCloudClient {
             };
 
             let status = resp.status();
+            let content_type = resp
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_string();
             let body = match resp.text().await {
                 Ok(b) => b,
                 Err(e) => {
@@ -976,6 +1151,17 @@ impl SoundCloudClient {
                 }
             };
 
+            if is_datadome_response(status, &content_type, &body) && !dd_refreshed {
+                dd_refreshed = true;
+                log::warn!("DataDome challenge on paginated endpoint {current_url}; refreshing cookie...");
+                if self.refresh_datadome_cookie().await.is_ok() {
+                    pages -= 1;
+                    next_url = Some(current_url);
+                    continue;
+                }
+                break;
+            }
+
             if !status.is_success() {
                 let snippet: String = body.chars().take(300).collect();
                 log::warn!(
@@ -983,6 +1169,15 @@ impl SoundCloudClient {
                     status,
                     current_url,
                     snippet
+                );
+                break;
+            }
+
+            if is_html_body(&content_type, &body) {
+                log::warn!(
+                    "Paginated endpoint returned HTML instead of JSON (HTTP {}) for {}",
+                    status,
+                    current_url
                 );
                 break;
             }
@@ -1039,23 +1234,15 @@ impl SoundCloudClient {
             ("limit", "50"),
             ("linked_partitioning", "1"),
         ];
-        let resp = self
-            .execute_api_request(
-                reqwest::Method::GET,
-                &url,
-                query_params,
-                None,
-                oauth_token,
-            )
-            .await?;
-
-        if !resp.status().is_success() {
-            return Err(format!("Get user tracks failed with status: {}", resp.status()));
-        }
-
-        resp.json()
-            .await
-            .map_err(|e| format!("Failed to parse user tracks JSON: {e}"))
+        self.execute_api_json(
+            reqwest::Method::GET,
+            &url,
+            query_params,
+            None,
+            oauth_token,
+            "Get user tracks",
+        )
+        .await
     }
 
     pub async fn get_library(
@@ -1063,6 +1250,7 @@ impl SoundCloudClient {
         user_id: u64,
         oauth_token: Option<&str>,
     ) -> Result<serde_json::Value, String> {
+        let epoch = self.cache_epoch.load(Ordering::SeqCst);
         let cache_key = format!("library:{user_id}:{}", oauth_token.unwrap_or(""));
         if let Ok(guard) = self.response_cache.read()
             && let Some((val, timestamp)) = guard.get(&cache_key)
@@ -1085,16 +1273,19 @@ impl SoundCloudClient {
         ];
 
         let (likes_res, created_pls, liked_pls) = tokio::join!(
-            self.execute_api_request(
+            self.execute_api_json::<serde_json::Value>(
                 reqwest::Method::GET,
                 &likes_url,
                 query_params,
                 None,
                 oauth_token,
+                "Library likes",
             ),
             self.fetch_paginated_collection(&user_created_playlists_url, 5, oauth_token),
             self.fetch_paginated_collection(&liked_playlists_url, 5, oauth_token),
         );
+
+        let likes_val = likes_res?;
 
         let mut all_playlists: Vec<serde_json::Value> = Vec::new();
         let mut seen_keys = std::collections::HashSet::new();
@@ -1123,11 +1314,6 @@ impl SoundCloudClient {
             apply_playlist_artwork_fallback(pl);
         }
 
-        let likes_val: serde_json::Value = match likes_res {
-            Ok(r) => r.json().await.unwrap_or(serde_json::json!({"collection": []})),
-            Err(_) => serde_json::json!({"collection": []}),
-        };
-
         let likes_array = likes_val
             .get("collection")
             .cloned()
@@ -1144,7 +1330,9 @@ impl SoundCloudClient {
             "playlists": all_playlists,
         });
 
-        if let Ok(mut guard) = self.response_cache.write() {
+        if self.cache_epoch.load(Ordering::SeqCst) == epoch
+            && let Ok(mut guard) = self.response_cache.write()
+        {
             guard.insert(cache_key, (res.clone(), Instant::now()));
         }
 
@@ -1173,23 +1361,16 @@ impl SoundCloudClient {
             )
         };
 
-        let resp = self
-            .execute_api_request(reqwest::Method::GET, &url, rep_params, None, oauth_token)
+        let mut playlist_json: serde_json::Value = self
+            .execute_api_json(
+                reqwest::Method::GET,
+                &url,
+                rep_params,
+                None,
+                oauth_token,
+                "Get playlist",
+            )
             .await?;
-
-        let status = resp.status();
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| format!("Failed to read playlist response: {e}"))?;
-
-        if !status.is_success() {
-            let snippet: String = body.chars().take(300).collect();
-            return Err(format!("Get playlist failed ({status}): {snippet}"));
-        }
-
-        let mut playlist_json: serde_json::Value = serde_json::from_str(&body)
-            .map_err(|e| format!("Failed to parse playlist JSON: {e}"))?;
 
         if let Some(tracks) = playlist_json.get_mut("tracks").and_then(|t| t.as_array_mut()) {
             let mut stub_ids: Vec<u64> = Vec::new();
@@ -1277,17 +1458,15 @@ impl SoundCloudClient {
         oauth_token: Option<&str>,
     ) -> Result<serde_json::Value, String> {
         let url = format!("https://api-v2.soundcloud.com/tracks/{track_id}");
-        let resp = self
-            .execute_api_request(reqwest::Method::GET, &url, &[], None, oauth_token)
-            .await?;
-
-        if !resp.status().is_success() {
-            return Err(format!("Get track failed with status: {}", resp.status()));
-        }
-
-        resp.json()
-            .await
-            .map_err(|e| format!("Failed to parse track JSON: {e}"))
+        self.execute_api_json(
+            reqwest::Method::GET,
+            &url,
+            &[],
+            None,
+            oauth_token,
+            "Get track",
+        )
+        .await
     }
 
     pub async fn toggle_like(
@@ -1315,6 +1494,12 @@ impl SoundCloudClient {
             .await?;
 
         let status = resp.status();
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
         if status.is_success() || status == reqwest::StatusCode::NO_CONTENT {
             self.invalidate_response_cache();
             log::info!("Toggled like for track {track_id} (liked={liked})");
@@ -1322,7 +1507,7 @@ impl SoundCloudClient {
         }
 
         let body_text = resp.text().await.unwrap_or_default();
-        if body_text.contains("geo.captcha-delivery.com") {
+        if is_datadome_response(status, &content_type, &body_text) {
             log::warn!("DataDome challenge detected on toggle_like. Refreshing datadome cookie...");
             if let Ok(new_dd) = self.refresh_datadome_cookie().await {
                 log::info!("Fresh datadome cookie acquired ({new_dd:?}). Retrying toggle_like once...");
@@ -1340,6 +1525,13 @@ impl SoundCloudClient {
                     return Err(format!("Toggle like failed after DataDome refresh: status={retry_status}"));
                 }
             }
+        }
+
+        if is_html_body(&content_type, &body_text) {
+            log::error!("SoundCloud returned HTML ({status}) on toggle_like for track {track_id}");
+            return Err(format!(
+                "Toggle like blocked by non-JSON HTML response (HTTP {status})"
+            ));
         }
 
         log::error!(
@@ -1443,6 +1635,7 @@ impl SoundCloudClient {
 
         let mut client_id = self.get_client_id().await;
         let mut client_id_refreshed = false;
+        let mut last_transport_err: Option<String> = None;
         let client = self.client().await;
 
         for (score, tc) in &scored_transcodings {
@@ -1467,7 +1660,13 @@ impl SoundCloudClient {
                 }
                 req = self.apply_browser_headers(req, oauth_token);
 
-                let mut resp_opt = req.send().await.ok();
+                let mut resp_opt = match req.send().await {
+                    Ok(r) => Some(r),
+                    Err(e) => {
+                        last_transport_err = Some(format!("Transcoding network/proxy error: {e}"));
+                        None
+                    }
+                };
 
                 if let Some(ref resp) = resp_opt {
                     let status = resp.status();
@@ -1490,19 +1689,21 @@ impl SoundCloudClient {
                                 retry_req = retry_req.query(&[("track_authorization", track_auth)]);
                             }
                             retry_req = self.apply_browser_headers(retry_req, oauth_token);
-                            resp_opt = retry_req.send().await.ok();
+                            resp_opt = match retry_req.send().await {
+                                Ok(r) => Some(r),
+                                Err(e) => {
+                                    last_transport_err = Some(format!("Transcoding network/proxy retry error: {e}"));
+                                    None
+                                }
+                            };
                         }
                     }
                 }
 
                 if let Some(resp) = resp_opt {
-                    let status = resp.status();
-                    if status == reqwest::StatusCode::PROXY_AUTHENTICATION_REQUIRED {
-                        return Err("Proxy authentication failed (HTTP 407). Please verify username and password in Settings.".to_string());
-                    }
-                    if status.is_success() {
-                        if let Ok(stream_obj) = resp.json::<serde_json::Value>().await
-                            && let Some(stream_url) = stream_obj.get("url").and_then(|u| u.as_str()) {
+                    match read_and_parse_json::<serde_json::Value>(resp, "Resolve transcoding").await {
+                        Ok(stream_obj) => {
+                            if let Some(stream_url) = stream_obj.get("url").and_then(|u| u.as_str()) {
                                 let normalized_protocol = if protocol_str == "progressive"
                                     || (stream_url.contains(".mp3") && !stream_url.contains(".m3u8"))
                                 {
@@ -1566,14 +1767,24 @@ impl SoundCloudClient {
 
                                 return Ok(resolution);
                             }
-                    } else {
-                        log::warn!(
-                            "Transcoding resolution returned HTTP {status} for track {track_id} from {url} (oauth: {})",
-                            oauth_token.is_some()
-                        );
+                        }
+                        Err(ApiJsonError::Recoverable(msg)) if msg.contains("HTTP 407") => {
+                            return Err(msg);
+                        }
+                        Err(e) => {
+                            let msg = e.into_message();
+                            log::warn!(
+                                "Transcoding resolution failed for track {track_id} from {url} (oauth: {}): {msg}",
+                                oauth_token.is_some()
+                            );
+                        }
                     }
                 }
             }
+        }
+
+        if let Some(transport_err) = last_transport_err {
+            return Err(transport_err);
         }
 
         let monetization = track_json
@@ -1664,6 +1875,7 @@ impl SoundCloudClient {
         track_id: u64,
         oauth_token: Option<&str>,
     ) -> Result<StreamResolution, String> {
+        let epoch = self.cache_epoch.load(Ordering::SeqCst);
         let proxy_enabled = self.settings.read().map(|s| s.proxy_enabled).unwrap_or(false);
         if proxy_enabled {
             log::info!("[SoundCloudClient] Resolving stream for track {track_id} (Proxy active)");
@@ -1671,7 +1883,9 @@ impl SoundCloudClient {
 
         match self.resolve_stream_inner(track_id, oauth_token).await {
             Ok(res) => {
-                if let Ok(mut guard) = self.stream_cache.write() {
+                if self.cache_epoch.load(Ordering::SeqCst) == epoch
+                    && let Ok(mut guard) = self.stream_cache.write()
+                {
                     guard.insert(track_id, (res.clone(), Instant::now()));
                 }
                 Ok(res)
@@ -1680,15 +1894,23 @@ impl SoundCloudClient {
                 let is_terminal_drm = stage1_err.contains("Protected stream")
                     || stage1_err.contains("DRM not supported")
                     || stage1_err.contains("Go+");
+                let is_proxy_or_network_failure = stage1_err.contains("Proxy authentication failed")
+                    || stage1_err.contains("HTTP 407")
+                    || stage1_err.contains("Proxy relay error")
+                    || stage1_err.contains("network error")
+                    || stage1_err.contains("network/proxy")
+                    || stage1_err.contains("DataDome");
 
-                if oauth_token.is_some() && !is_terminal_drm {
+                if oauth_token.is_some() && !is_terminal_drm && !is_proxy_or_network_failure {
                     log::info!(
-                        "Falling back to unauthenticated proxy stream resolution for track {track_id} (authenticated error: {stage1_err})"
+                        "Falling back to unauthenticated stream resolution for track {track_id} (authenticated error: {stage1_err})"
                     );
                     match self.resolve_stream_inner(track_id, None).await {
                         Ok(guest_res) => {
-                            log::info!("Successfully resolved track {track_id} via unauthenticated proxy fallback!");
-                            if let Ok(mut guard) = self.stream_cache.write() {
+                            log::info!("Successfully resolved track {track_id} via unauthenticated fallback!");
+                            if self.cache_epoch.load(Ordering::SeqCst) == epoch
+                                && let Ok(mut guard) = self.stream_cache.write()
+                            {
                                 guard.insert(track_id, (guest_res.clone(), Instant::now()));
                             }
                             return Ok(guest_res);
@@ -1699,15 +1921,12 @@ impl SoundCloudClient {
                     }
                 }
 
-                let is_proxy_level_failure = stage1_err.contains("Proxy authentication failed")
-                    || stage1_err.contains("HTTP 407")
-                    || stage1_err.contains("Failed to connect via proxy")
-                    || stage1_err.contains("Proxy relay error");
-
-                if !is_proxy_level_failure
-                    && let Ok(mut guard) = self.negative_stream_cache.write() {
-                        guard.insert(track_id, (stage1_err.clone(), Instant::now()));
-                    }
+                if !is_proxy_or_network_failure
+                    && self.cache_epoch.load(Ordering::SeqCst) == epoch
+                    && let Ok(mut guard) = self.negative_stream_cache.write()
+                {
+                    guard.insert(track_id, (stage1_err.clone(), Instant::now()));
+                }
                 Err(stage1_err)
             }
         }
@@ -1716,8 +1935,10 @@ impl SoundCloudClient {
     pub async fn get_me_checked(&self, oauth_token: &str) -> Result<serde_json::Value, GetMeError> {
         let client = self.client().await;
         let mut client_id = self.get_client_id().await;
+        let mut cid_refreshed = false;
+        let mut dd_refreshed = false;
 
-        for attempt in 0..2 {
+        for _ in 0..3 {
             let req = client
                 .get("https://api-v2.soundcloud.com/me")
                 .timeout(Duration::from_secs(20))
@@ -1729,59 +1950,40 @@ impl SoundCloudClient {
                 .await
                 .map_err(|e| GetMeError::Recoverable(format!("SoundCloud API network error: {e}")))?;
 
-            let status = resp.status();
-            if status.is_success() {
-                return resp.json().await.map_err(|e| {
-                    GetMeError::Recoverable(format!("Failed to parse user profile: {e}"))
-                });
-            }
-
-            if status == reqwest::StatusCode::PROXY_AUTHENTICATION_REQUIRED {
-                return Err(GetMeError::Recoverable(
-                    "Proxy authentication failed (HTTP 407)".to_string(),
-                ));
-            }
-
-            let body = resp.text().await.unwrap_or_default();
-            let lower_body = body.to_lowercase();
-            let is_datadome = lower_body.contains("geo.captcha-delivery.com")
-                || lower_body.contains("datadome");
-
-            if is_datadome || status == reqwest::StatusCode::FORBIDDEN {
-                return Err(GetMeError::Recoverable(format!(
-                    "SoundCloud verification/access check ({status})"
-                )));
-            }
-
-            if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
-                return Err(GetMeError::Recoverable(format!(
-                    "SoundCloud temporary error ({status})"
-                )));
-            }
-
-            if status == reqwest::StatusCode::UNAUTHORIZED {
-                if attempt == 0 {
-                    // Confirm 401 is not caused by a stale client_id before invalidating oauth_token.
-                    match self.refresh_client_id().await {
-                        Ok(new_id) => {
-                            client_id = new_id;
+            match read_and_parse_json::<serde_json::Value>(resp, "Get profile (/me)").await {
+                Ok(val) => return Ok(val),
+                Err(ApiJsonError::DataDome(msg)) => {
+                    if !dd_refreshed {
+                        dd_refreshed = true;
+                        log::warn!("DataDome challenge on /me; attempting isolated dd-refresh...");
+                        if self.refresh_datadome_cookie().await.is_ok() {
                             continue;
                         }
-                        Err(e) => {
-                            return Err(GetMeError::Recoverable(format!(
-                                "Could not verify session (client_id refresh failed): {e}"
-                            )));
+                    }
+                    return Err(GetMeError::Recoverable(msg));
+                }
+                Err(ApiJsonError::Unauthorized(msg)) => {
+                    if !cid_refreshed {
+                        cid_refreshed = true;
+                        // Confirm 401 is not caused by a stale client_id before invalidating oauth_token.
+                        match self.refresh_client_id().await {
+                            Ok(new_id) => {
+                                client_id = new_id;
+                                continue;
+                            }
+                            Err(e) => {
+                                return Err(GetMeError::Recoverable(format!(
+                                    "Could not verify session (client_id refresh failed): {e}"
+                                )));
+                            }
                         }
                     }
+                    return Err(GetMeError::Unauthorized(msg));
                 }
-                return Err(GetMeError::Unauthorized(
-                    "SoundCloud session expired (HTTP 401 Unauthorized)".to_string(),
-                ));
+                Err(ApiJsonError::Recoverable(msg)) => {
+                    return Err(GetMeError::Recoverable(msg));
+                }
             }
-
-            return Err(GetMeError::Recoverable(format!(
-                "Get me failed with status: {status}"
-            )));
         }
 
         Err(GetMeError::Recoverable(
@@ -1799,7 +2001,7 @@ impl SoundCloudClient {
         &self,
         test_client: &reqwest::Client,
     ) -> Result<(String, String), String> {
-        let mut client_id = match Self::extract_client_id_with_http(test_client).await {
+        let mut client_id = match Self::extract_client_id_with_http(test_client, None).await {
             Ok(id) => id,
             Err(_) => {
                 if let Ok(guard) = self.cached_client_id.read()
@@ -1835,7 +2037,7 @@ impl SoundCloudClient {
         if matches!(
             track_resp.status(),
             reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
-        ) && let Ok(fresh_id) = Self::extract_client_id_with_http(test_client).await
+        ) && let Ok(fresh_id) = Self::extract_client_id_with_http(test_client, None).await
         {
             client_id = fresh_id;
             track_resp = fetch_track(test_client, &client_id)
@@ -1843,12 +2045,7 @@ impl SoundCloudClient {
                 .map_err(|e| format!("SoundCloud API retry failed via proxy: {e}"))?;
         }
 
-        let track_json: serde_json::Value = if track_resp.status().is_success() {
-            track_resp
-                .json()
-                .await
-                .map_err(|e| format!("Failed to parse SoundCloud track JSON: {e}"))?
-        } else if track_resp.status() == reqwest::StatusCode::NOT_FOUND {
+        let track_json: serde_json::Value = if track_resp.status() == reqwest::StatusCode::NOT_FOUND {
             let search_resp = test_client
                 .get("https://api-v2.soundcloud.com/search/tracks")
                 .timeout(Duration::from_secs(15))
@@ -1859,16 +2056,10 @@ impl SoundCloudClient {
                 .send()
                 .await
                 .map_err(|e| format!("SoundCloud search failed via proxy: {e}"))?;
-            if !search_resp.status().is_success() {
-                return Err(format!(
-                    "SoundCloud API returned HTTP {}",
-                    search_resp.status()
-                ));
-            }
-            let search_json: serde_json::Value = search_resp
-                .json()
-                .await
-                .map_err(|e| format!("Failed to parse search response: {e}"))?;
+            let search_json: serde_json::Value =
+                read_and_parse_json(search_resp, "Proxy test search")
+                    .await
+                    .map_err(|e| e.into_message())?;
             search_json
                 .get("collection")
                 .and_then(|c| c.as_array())
@@ -1883,10 +2074,9 @@ impl SoundCloudClient {
                 .cloned()
                 .ok_or_else(|| "No playable test track returned by SoundCloud API".to_string())?
         } else {
-            return Err(format!(
-                "SoundCloud API returned HTTP {}",
-                track_resp.status()
-            ));
+            read_and_parse_json(track_resp, "Proxy test track")
+                .await
+                .map_err(|e| e.into_message())?
         };
 
         let transcodings = track_json
@@ -1954,39 +2144,29 @@ impl SoundCloudClient {
             .execute_api_request(method.clone(), endpoint, query_params, body.clone(), oauth_token)
             .await?;
 
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-
-        if status.is_success() || status == reqwest::StatusCode::NO_CONTENT {
-            if text.trim().is_empty() {
-                return Ok(serde_json::json!({}));
-            }
-            return serde_json::from_str(&text)
-                .map_err(|e| format!("Failed to parse {action_name} response: {e}"));
+        if resp.status() == reqwest::StatusCode::NO_CONTENT {
+            return Ok(serde_json::json!({}));
         }
 
-        if status == reqwest::StatusCode::FORBIDDEN || text.contains("geo.captcha-delivery.com") {
-            log::warn!("DataDome challenge on {action_name} ({status}), refreshing cookie...");
-            if self.refresh_datadome_cookie().await.is_ok() {
-                let retry_resp = self
-                    .execute_api_request(method, endpoint, query_params, body, oauth_token)
-                    .await?;
-                let retry_status = retry_resp.status();
-                let retry_text = retry_resp.text().await.unwrap_or_default();
-                if retry_status.is_success() || retry_status == reqwest::StatusCode::NO_CONTENT {
-                    if retry_text.trim().is_empty() {
+        match read_and_parse_json::<serde_json::Value>(resp, action_name).await {
+            Ok(val) => Ok(val),
+            Err(ApiJsonError::DataDome(msg)) => {
+                log::warn!("DataDome challenge on {action_name}, refreshing cookie...");
+                if self.refresh_datadome_cookie().await.is_ok() {
+                    let retry_resp = self
+                        .execute_api_request(method, endpoint, query_params, body, oauth_token)
+                        .await?;
+                    if retry_resp.status() == reqwest::StatusCode::NO_CONTENT {
                         return Ok(serde_json::json!({}));
                     }
-                    return serde_json::from_str(&retry_text)
-                        .map_err(|e| format!("Failed to parse {action_name} retry response: {e}"));
+                    return read_and_parse_json(retry_resp, action_name)
+                        .await
+                        .map_err(|e| e.into_message());
                 }
-                let snippet: String = retry_text.chars().take(300).collect();
-                return Err(format!("{action_name} failed ({retry_status}): {snippet}"));
+                Err(msg)
             }
+            Err(e) => Err(e.into_message()),
         }
-
-        let snippet: String = text.chars().take(300).collect();
-        Err(format!("{action_name} failed ({status}): {snippet}"))
     }
 
     pub async fn add_track_to_playlist(
@@ -1996,25 +2176,16 @@ impl SoundCloudClient {
         oauth_token: &str,
     ) -> Result<serde_json::Value, String> {
         let url = format!("https://api-v2.soundcloud.com/playlists/{playlist_id}");
-        let resp = self
-            .execute_api_request(
+        let existing: serde_json::Value = self
+            .execute_api_json(
                 reqwest::Method::GET,
                 &url,
                 &[("representation", "compact")],
                 None,
                 Some(oauth_token),
+                "Load playlist for add_track",
             )
             .await?;
-
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        if !status.is_success() {
-            let snippet: String = body.chars().take(300).collect();
-            return Err(format!("Failed to load playlist ({status}): {snippet}"));
-        }
-
-        let existing: serde_json::Value = serde_json::from_str(&body)
-            .map_err(|e| format!("Failed to parse existing playlist JSON: {e}"))?;
 
         let mut track_ids: Vec<i64> = Vec::new();
         if let Some(arr) = existing.get("tracks").and_then(|t| t.as_array()) {
@@ -2134,9 +2305,15 @@ impl SoundCloudClient {
                 .map_err(|e| format!("post_track_comment network error: {e}"))?;
 
             let status = resp.status();
+            let content_type = resp
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_string();
             let text = resp.text().await.unwrap_or_default();
 
-            if status.is_success() {
+            if status.is_success() && !is_html_body(&content_type, &text) {
                 if text.trim().is_empty() {
                     return Ok(serde_json::json!({}));
                 }
@@ -2144,17 +2321,23 @@ impl SoundCloudClient {
                     .map_err(|e| format!("Failed to parse comment response: {e}"));
             }
 
-            if (status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN)
+            if (status == reqwest::StatusCode::UNAUTHORIZED
+                || is_datadome_response(status, &content_type, &text))
                 && attempt == 0
             {
-                if text.contains("geo.captcha-delivery.com") || status == reqwest::StatusCode::FORBIDDEN {
+                if is_datadome_response(status, &content_type, &text) {
                     log::warn!("DataDome challenge on post_track_comment ({status}), refreshing cookie...");
                     let _ = self.refresh_datadome_cookie().await;
-                }
-                if let Ok(new_id) = self.refresh_client_id().await {
+                } else if let Ok(new_id) = self.refresh_client_id().await {
                     client_id = new_id;
                 }
                 continue;
+            }
+
+            if is_html_body(&content_type, &text) {
+                return Err(format!(
+                    "post_track_comment received HTML instead of JSON (HTTP {status})"
+                ));
             }
 
             let snippet: String = text.chars().take(300).collect();
@@ -2349,14 +2532,22 @@ impl SoundCloudClient {
         );
 
         let user_resp = user_res?;
-        let user_status = user_resp.status();
-        let user_body = user_resp.text().await.unwrap_or_default();
-        if !user_status.is_success() {
-            let snippet: String = user_body.chars().take(300).collect();
-            return Err(format!("Failed to load user profile ({user_status}): {snippet}"));
-        }
-        let user_json: serde_json::Value = serde_json::from_str(&user_body)
-            .map_err(|e| format!("Failed to parse user profile JSON: {e}"))?;
+        let user_json: serde_json::Value = match read_and_parse_json(user_resp, "Get user profile").await {
+            Ok(val) => val,
+            Err(ApiJsonError::DataDome(msg)) => {
+                if self.refresh_datadome_cookie().await.is_ok() {
+                    let retry_resp = self
+                        .execute_api_request(reqwest::Method::GET, &user_url, &[], None, oauth_token)
+                        .await?;
+                    read_and_parse_json(retry_resp, "Get user profile")
+                        .await
+                        .map_err(|e| e.into_message())?
+                } else {
+                    return Err(msg);
+                }
+            }
+            Err(e) => return Err(e.into_message()),
+        };
 
         for pl in playlists.iter_mut() {
             apply_playlist_artwork_fallback(pl);
@@ -2498,5 +2689,22 @@ mod tests {
             encode_path_segment(urn),
             "soundcloud%3Asystem-playlists%3Apersonalized-tracks%3A123456"
         );
+    }
+
+    #[test]
+    fn test_html_and_datadome_detection() {
+        assert!(is_html_body("text/html; charset=utf-8", "{}"));
+        assert!(is_html_body("application/json", "  <!DOCTYPE html><html></html>"));
+        assert!(!is_html_body("application/json", r#"{"id":123}"#));
+        assert!(is_datadome_response(
+            reqwest::StatusCode::FORBIDDEN,
+            "text/html",
+            "<html><script src=\"https://geo.captcha-delivery.com/captcha/\"></script></html>"
+        ));
+        assert!(!is_datadome_response(
+            reqwest::StatusCode::UNAUTHORIZED,
+            "application/json",
+            r#"{"errors":[{"error_message":"401 - Unauthorized"}]}"#
+        ));
     }
 }

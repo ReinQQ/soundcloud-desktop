@@ -1,6 +1,8 @@
 use base64::prelude::*;
+use std::future::Future;
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -13,6 +15,7 @@ const RELAY_IDLE_TIMEOUT: Duration = Duration::from_secs(180);
 pub struct ProxyBridge {
     pub local_port: u16,
     pub upstream_url: String,
+    alive: Arc<AtomicBool>,
     abort_handle: tokio::task::AbortHandle,
 }
 
@@ -28,6 +31,8 @@ impl ProxyBridge {
 
         let upstream_url = upstream.to_string();
         let upstream_clone = upstream.clone();
+        let alive = Arc::new(AtomicBool::new(true));
+        let alive_loop = alive.clone();
 
         // Keep no strong Arc<ProxyBridge> inside the accept loop so Drop always aborts it.
         let handle = tokio::spawn(async move {
@@ -48,11 +53,13 @@ impl ProxyBridge {
                     }
                 }
             }
+            alive_loop.store(false, Ordering::SeqCst);
         });
 
         let bridge = Arc::new(Self {
             local_port,
             upstream_url: upstream_url.clone(),
+            alive,
             abort_handle: handle.abort_handle(),
         });
 
@@ -63,7 +70,12 @@ impl ProxyBridge {
         Ok(bridge)
     }
 
+    pub fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::SeqCst)
+    }
+
     pub fn shutdown(&self) {
+        self.alive.store(false, Ordering::SeqCst);
         self.abort_handle.abort();
         log::info!("[ProxyBridge] Local proxy bridge on port {} shut down", self.local_port);
     }
@@ -75,6 +87,7 @@ impl ProxyBridge {
 
 impl Drop for ProxyBridge {
     fn drop(&mut self) {
+        self.alive.store(false, Ordering::SeqCst);
         self.abort_handle.abort();
     }
 }
@@ -95,8 +108,34 @@ async fn read_http_headers<S: AsyncRead + Unpin>(stream: &mut S, max_bytes: usiz
     Ok(header_buf)
 }
 
+async fn connect_with_gateway_reply<F, Fut>(
+    client: &mut TcpStream,
+    fut: F,
+    timeout_msg: &'static str,
+) -> io::Result<UpstreamStream>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = io::Result<UpstreamStream>>,
+{
+    match tokio::time::timeout(HANDSHAKE_TIMEOUT, fut()).await {
+        Ok(Ok(stream)) => Ok(stream),
+        Ok(Err(e)) => {
+            let _ = client
+                .write_all(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
+                .await;
+            Err(e)
+        }
+        Err(_) => {
+            let _ = client
+                .write_all(b"HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\n\r\n")
+                .await;
+            Err(io::Error::new(io::ErrorKind::TimedOut, timeout_msg))
+        }
+    }
+}
+
 async fn handle_client(mut client: TcpStream, upstream: &Url) -> io::Result<()> {
-    let header_buf = tokio::time::timeout(HANDSHAKE_TIMEOUT, read_http_headers(&mut client, 16384))
+    let header_buf = tokio::time::timeout(HANDSHAKE_TIMEOUT, read_http_headers(&mut client, 65536))
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Timed out reading client headers"))??;
 
@@ -105,9 +144,8 @@ async fn handle_client(mut client: TcpStream, upstream: &Url) -> io::Result<()> 
     }
 
     let header_str = String::from_utf8_lossy(&header_buf);
-    let request_line = match header_str.lines().next() {
-        Some(l) => l,
-        None => return Ok(()),
+    let Some(request_line) = header_str.lines().next() else {
+        return Ok(());
     };
 
     let parts: Vec<&str> = request_line.split_whitespace().collect();
@@ -126,29 +164,12 @@ async fn handle_client(mut client: TcpStream, upstream: &Url) -> io::Result<()> 
             crate::settings::redact_proxy_url(upstream.as_ref())
         );
 
-        let upstream_io = match tokio::time::timeout(
-            HANDSHAKE_TIMEOUT,
-            connect_upstream_tunnel(upstream, &host, port),
+        let upstream_io = connect_with_gateway_reply(
+            &mut client,
+            || connect_upstream_tunnel(upstream, &host, port),
+            "Upstream CONNECT timed out",
         )
-        .await
-        {
-            Ok(Ok(s)) => s,
-            Ok(Err(e)) => {
-                let _ = client
-                    .write_all(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
-                    .await;
-                return Err(e);
-            }
-            Err(_) => {
-                let _ = client
-                    .write_all(b"HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\n\r\n")
-                    .await;
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "Upstream CONNECT timed out",
-                ));
-            }
-        };
+        .await?;
 
         client
             .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
@@ -158,29 +179,12 @@ async fn handle_client(mut client: TcpStream, upstream: &Url) -> io::Result<()> 
         relay_bidirectional(client, upstream_io).await
     } else if scheme == "http" || scheme == "https" {
         // Forward plain HTTP request directly to HTTP/HTTPS upstream proxy with Proxy-Authorization injected.
-        let mut upstream_io = match tokio::time::timeout(
-            HANDSHAKE_TIMEOUT,
-            connect_raw_upstream(upstream),
+        let mut upstream_io = connect_with_gateway_reply(
+            &mut client,
+            || connect_raw_upstream(upstream),
+            "Upstream HTTP proxy connection timed out",
         )
-        .await
-        {
-            Ok(Ok(s)) => s,
-            Ok(Err(e)) => {
-                let _ = client
-                    .write_all(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
-                    .await;
-                return Err(e);
-            }
-            Err(_) => {
-                let _ = client
-                    .write_all(b"HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\n\r\n")
-                    .await;
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "Upstream HTTP proxy connection timed out",
-                ));
-            }
-        };
+        .await?;
 
         let rewritten = inject_proxy_auth_header(&header_str, upstream);
         upstream_io.write_all(rewritten.as_bytes()).await?;
@@ -195,29 +199,12 @@ async fn handle_client(mut client: TcpStream, upstream: &Url) -> io::Result<()> 
             crate::settings::redact_proxy_url(upstream.as_ref())
         );
 
-        let mut upstream_io = match tokio::time::timeout(
-            HANDSHAKE_TIMEOUT,
-            connect_upstream_tunnel(upstream, &host, port),
+        let mut upstream_io = connect_with_gateway_reply(
+            &mut client,
+            || connect_upstream_tunnel(upstream, &host, port),
+            "Upstream SOCKS connect timed out",
         )
-        .await
-        {
-            Ok(Ok(s)) => s,
-            Ok(Err(e)) => {
-                let _ = client
-                    .write_all(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
-                    .await;
-                return Err(e);
-            }
-            Err(_) => {
-                let _ = client
-                    .write_all(b"HTTP/1.1 504 Gateway Timeout\r\nConnection: close\r\n\r\n")
-                    .await;
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "Upstream SOCKS connect timed out",
-                ));
-            }
-        };
+        .await?;
 
         let origin_req = rewrite_proxy_request_to_origin_form(&header_str);
         upstream_io.write_all(origin_req.as_bytes()).await?;
@@ -274,16 +261,16 @@ async fn connect_raw_upstream(upstream: &Url) -> io::Result<UpstreamStream> {
     };
     let upstream_port = upstream.port().unwrap_or(default_port);
 
-    let tcp = TcpStream::connect((upstream_host, upstream_port)).await?;
+    let clean_host = upstream_host.trim_matches(|c| c == '[' || c == ']');
+    let tcp = TcpStream::connect((clean_host, upstream_port)).await?;
     let _ = tcp.set_nodelay(true);
 
     if scheme == "https" {
         let connector = native_tls::TlsConnector::new()
             .map_err(|e| io::Error::other(format!("Failed to create TLS connector: {e}")))?;
         let tls_connector = tokio_native_tls::TlsConnector::from(connector);
-        let domain = upstream_host.trim_matches(|c| c == '[' || c == ']');
         let tls_stream = tls_connector
-            .connect(domain, tcp)
+            .connect(clean_host, tcp)
             .await
             .map_err(|e| io::Error::other(format!("HTTPS proxy TLS handshake failed: {e}")))?;
         Ok(UpstreamStream::Tls(Box::new(tls_stream)))
@@ -544,15 +531,22 @@ where
         let n = match tokio::time::timeout(RELAY_IDLE_TIMEOUT, reader.read(&mut buf)).await {
             Ok(Ok(0)) => break,
             Ok(Ok(n)) => n,
-            Ok(Err(e)) => return Err(e),
+            Ok(Err(e)) => {
+                let _ = writer.shutdown().await;
+                return Err(e);
+            }
             Err(_) => {
+                let _ = writer.shutdown().await;
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     "Proxy relay idle timeout",
                 ));
             }
         };
-        writer.write_all(&buf[..n]).await?;
+        if let Err(e) = writer.write_all(&buf[..n]).await {
+            let _ = writer.shutdown().await;
+            return Err(e);
+        }
         total += n as u64;
     }
     // Half-close write side (Shutdown::Write) so the peer finishes draining remaining TLS/HTTP frames.
@@ -560,24 +554,43 @@ where
     Ok(total)
 }
 
-async fn relay_streams<U>(client: TcpStream, upstream: U) -> io::Result<()>
+async fn relay_split<R1, W1, R2, W2>(cr: R1, cw: W1, ur: R2, uw: W2) -> io::Result<()>
 where
-    U: AsyncRead + AsyncWrite + Unpin,
+    R1: AsyncRead + Unpin,
+    W1: AsyncWrite + Unpin,
+    R2: AsyncRead + Unpin,
+    W2: AsyncWrite + Unpin,
 {
-    let (cr, cw) = tokio::io::split(client);
-    let (ur, uw) = tokio::io::split(upstream);
-
     let c2u = copy_with_half_close(cr, uw);
     let u2c = copy_with_half_close(ur, cw);
+    tokio::pin!(c2u);
+    tokio::pin!(u2c);
 
-    let (_r1, _r2) = tokio::join!(c2u, u2c);
+    tokio::select! {
+        res = &mut c2u => {
+            res?;
+            u2c.await?;
+        }
+        res = &mut u2c => {
+            res?;
+            c2u.await?;
+        }
+    }
     Ok(())
 }
 
 async fn relay_bidirectional(client: TcpStream, upstream: UpstreamStream) -> io::Result<()> {
     match upstream {
-        UpstreamStream::Plain(s) => relay_streams(client, s).await,
-        UpstreamStream::Tls(s) => relay_streams(client, *s).await,
+        UpstreamStream::Plain(s) => {
+            let (cr, cw) = client.into_split();
+            let (ur, uw) = s.into_split();
+            relay_split(cr, cw, ur, uw).await
+        }
+        UpstreamStream::Tls(s) => {
+            let (cr, cw) = tokio::io::split(client);
+            let (ur, uw) = tokio::io::split(*s);
+            relay_split(cr, cw, ur, uw).await
+        }
     }
 }
 
@@ -639,13 +652,16 @@ fn inject_proxy_auth_header(header_str: &str, upstream: &Url) -> String {
         if line.is_empty() {
             continue;
         }
-        if line.len() >= 20 && line[..20].eq_ignore_ascii_case("proxy-authorization:") {
+        if (line.len() >= 20 && line[..20].eq_ignore_ascii_case("proxy-authorization:"))
+            || (line.len() >= 17 && line[..17].eq_ignore_ascii_case("proxy-connection:"))
+            || (line.len() >= 11 && line[..11].eq_ignore_ascii_case("connection:"))
+        {
             continue;
         }
         out.push_str(line);
         out.push_str("\r\n");
     }
-    out.push_str("\r\n");
+    out.push_str("Connection: close\r\n\r\n");
     out
 }
 
@@ -677,13 +693,15 @@ fn rewrite_proxy_request_to_origin_form(header_str: &str) -> String {
         if line.is_empty() {
             continue;
         }
-        if line.len() >= 17 && line[..17].eq_ignore_ascii_case("proxy-connection:") {
+        if (line.len() >= 17 && line[..17].eq_ignore_ascii_case("proxy-connection:"))
+            || (line.len() >= 11 && line[..11].eq_ignore_ascii_case("connection:"))
+        {
             continue;
         }
         out.push_str(line);
         out.push_str("\r\n");
     }
-    out.push_str("\r\n");
+    out.push_str("Connection: close\r\n\r\n");
     out
 }
 
@@ -705,6 +723,17 @@ mod tests {
         let rewritten = rewrite_proxy_request_to_origin_form(raw);
         assert!(rewritten.starts_with("GET /api/test?a=1 HTTP/1.1\r\n"));
         assert!(!rewritten.to_lowercase().contains("proxy-connection:"));
+        assert!(rewritten.contains("Connection: close\r\n"));
+    }
+
+    #[test]
+    fn test_inject_proxy_auth_header_with_special_password() {
+        let upstream = crate::settings::validate_proxy_url("http://alice:p@ss:123@127.0.0.1:8080").unwrap();
+        let raw = "GET http://soundcloud.com/ HTTP/1.1\r\nHost: soundcloud.com\r\nProxy-Connection: keep-alive\r\n\r\n";
+        let rewritten = inject_proxy_auth_header(raw, &upstream);
+        let expected_auth = BASE64_STANDARD.encode(b"alice:p@ss:123");
+        assert!(rewritten.contains(&format!("Proxy-Authorization: Basic {expected_auth}\r\n")));
+        assert!(rewritten.contains("Connection: close\r\n"));
     }
 
     #[tokio::test]
@@ -713,6 +742,7 @@ mod tests {
         let bridge = ProxyBridge::start(upstream).await.unwrap();
         let port = bridge.local_port;
         assert!(port > 0);
+        assert!(bridge.is_alive());
         assert_eq!(Arc::strong_count(&bridge), 1);
         drop(bridge);
         tokio::time::sleep(Duration::from_millis(50)).await;

@@ -113,6 +113,8 @@ pub fn redact_proxy_url(raw: &str) -> String {
     if let Ok(mut parsed) = validate_proxy_url(trimmed) {
         if parsed.password().is_some() {
             let _ = parsed.set_password(Some("***"));
+        } else if !parsed.username().is_empty() {
+            let _ = parsed.set_username("***");
         }
         return parsed.to_string().trim_end_matches('/').to_string();
     }
@@ -121,10 +123,11 @@ pub fn redact_proxy_url(raw: &str) -> String {
     } else {
         ("", trimmed)
     };
-    if let Some((creds, host)) = rest.rsplit_once('@')
-        && let Some((user, _pass)) = creds.split_once(':')
-    {
-        return format!("{scheme_prefix}{user}:***@{host}");
+    if let Some((creds, host)) = rest.rsplit_once('@') {
+        if let Some((user, _pass)) = creds.split_once(':') {
+            return format!("{scheme_prefix}{user}:***@{host}");
+        }
+        return format!("{scheme_prefix}***@{host}");
     }
     trimmed.to_string()
 }
@@ -133,6 +136,9 @@ pub fn validate_proxy_url(raw: &str) -> Result<url::Url, String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err("Proxy URL cannot be empty".to_string());
+    }
+    if trimmed.chars().any(|c| c.is_control()) {
+        return Err("Proxy URL cannot contain control characters or newlines".to_string());
     }
 
     let (scheme, without_scheme) = if let Some(idx) = trimmed.find("://") {
@@ -159,11 +165,13 @@ pub fn validate_proxy_url(raw: &str) -> Result<url::Url, String> {
         if user.is_empty() {
             return Err("Proxy username cannot be empty".to_string());
         }
+        let clean_host_port = host_port.trim_end_matches('/');
         let enc_user = encode_userinfo_component(user);
         let enc_pass = encode_userinfo_component(pass);
-        format!("{scheme}://{enc_user}:{enc_pass}@{host_port}")
+        format!("{scheme}://{enc_user}:{enc_pass}@{clean_host_port}")
     } else {
-        format!("{scheme}://{without_scheme}")
+        let clean_host_port = without_scheme.trim_end_matches('/');
+        format!("{scheme}://{clean_host_port}")
     };
 
     let parsed = url::Url::parse(&canonical_url_str)
@@ -173,6 +181,9 @@ pub fn validate_proxy_url(raw: &str) -> Result<url::Url, String> {
     }
     if parsed.port().is_none() {
         return Err("Proxy URL must specify a port (e.g. host:port)".to_string());
+    }
+    if !parsed.path().is_empty() && parsed.path() != "/" {
+        return Err("Proxy URL must not contain a path".to_string());
     }
     Ok(parsed)
 }
@@ -197,12 +208,6 @@ impl AppSettings {
     }
 
     pub fn load_from_path(path: &Path) -> Self {
-        if !path.exists() {
-            let defaults = Self::default();
-            let _ = Self::save_to_path(path, &defaults);
-            return defaults;
-        }
-
         match fs::read_to_string(path) {
             Ok(content) => {
                 let clean = content.trim_start_matches('\u{feff}');
@@ -213,6 +218,11 @@ impl AppSettings {
                         Self::default()
                     }
                 }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                let defaults = Self::default();
+                let _ = Self::save_to_path(path, &defaults);
+                defaults
             }
             Err(err) => {
                 log::warn!("Failed to read {path:?}: {err}. Falling back to defaults.");
@@ -340,13 +350,13 @@ mod tests {
         assert_eq!(p2, "p@ss#1");
 
         assert!(validate_proxy_url("").is_err());
-        assert!(validate_proxy_url("reinqqrqqitzzz@64.188.92.231:44333").is_err());
-        assert!(validate_proxy_url("http://reinqqrqqitzzz@64.188.92.231:44333").is_err());
-        assert!(validate_proxy_url("http://reinqq:rqqitzzz@64.188.92.231:44333").is_ok());
+        assert!(validate_proxy_url("testuserpass@127.0.0.1:8080").is_err());
+        assert!(validate_proxy_url("http://testuserpass@127.0.0.1:8080").is_err());
+        assert!(validate_proxy_url("http://testuser:testpass@127.0.0.1:8080").is_ok());
 
         assert_eq!(
-            redact_proxy_url("http://reinqq:p@ss:word@64.188.92.231:44333"),
-            "http://reinqq:***@64.188.92.231:44333"
+            redact_proxy_url("http://testuser:p@ss:word@127.0.0.1:8080"),
+            "http://testuser:***@127.0.0.1:8080"
         );
     }
 
